@@ -14,6 +14,10 @@ import tkinter as tk
 from tkinter import filedialog, simpledialog, messagebox
 from tkinter import ttk
 import matplotlib
+import warnings
+
+# Ignore openpyxl warning about default styles
+warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl.styles')
 
 matplotlib.use('TkAgg')
 
@@ -593,7 +597,7 @@ class NucleiCounter:
         self.update_preview_figure(binary, nuclei_mask, result_img, count)
 
         # Update count label
-        count_text = f"Nuclei count: {count} (Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)})"
+        count_text = f"Nuclei count: {count} (Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)}) | Red dots: {len(self.red_dots)}"
         self.count_label.config(text=count_text)
 
     def on_preview_click(self, event):
@@ -839,7 +843,7 @@ class NucleiCounter:
             self.finalize_processing()
 
     def finalize_processing(self):
-        """Finalize processing and save summary CSV"""
+        """Finalize processing and save summary CSV and Excel"""
         if not self.total_results:
             messagebox.showinfo("No Results", "No images were processed.")
             return
@@ -864,6 +868,60 @@ class NucleiCounter:
             red_dots_df = pd.DataFrame(all_red_dots)
             red_dots_csv_path = os.path.join(self.output_dir, "all_red_dots.csv")
             red_dots_df.to_csv(red_dots_csv_path, index=False)
+        
+        # Create Excel report with requested format
+        excel_data = []
+        for result in self.total_results:
+            filename = result['Filename']
+            blue_nuclei_count = result['Total_Nuclei_Count']
+            red_dot_count = result['Red_Dot_Count']
+            
+            # Calculate ratio of red dots to blue nuclei
+            ratio = 0
+            if blue_nuclei_count > 0:
+                ratio = red_dot_count / blue_nuclei_count
+            
+            # Calculate average size of red dots in microns
+            avg_dot_size = 0
+            if filename in self.stored_red_dots and len(self.stored_red_dots[filename]) > 0:
+                dots = self.stored_red_dots[filename]
+                avg_dot_size = sum(dot['area_microns'] for dot in dots) / len(dots)
+            
+            excel_data.append({
+                'File Name': filename,
+                'Total Blue Nuclei': blue_nuclei_count,
+                'Total Red Dots': red_dot_count,
+                'Red Dots / Blue Nuclei Ratio': ratio,
+                'Avg Red Dot Size (μm²)': avg_dot_size
+            })
+        
+        # Create Excel file
+        if excel_data:
+            excel_df = pd.DataFrame(excel_data)
+            excel_path = os.path.join(self.output_dir, "staining_analysis_report.xlsx")
+            
+            # Format the Excel file with proper column widths
+            try:
+                with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+                    excel_df.to_excel(writer, sheet_name='Analysis Results', index=False)
+                    worksheet = writer.sheets['Analysis Results']
+                    
+                    # Adjust column widths
+                    for i, col in enumerate(excel_df.columns):
+                        # Set the width based on the length of the column name and the maximum length of data
+                        max_length = max(excel_df[col].astype(str).apply(len).max(), len(col)) + 3
+                        # Limit width to a reasonable maximum
+                        max_length = min(max_length, 50)
+                        # Excel measures column width in characters
+                        worksheet.column_dimensions[chr(65 + i)].width = max_length
+                
+                print(f"Excel report saved to {excel_path}")
+            except Exception as e:
+                print(f"Error creating Excel file: {e}")
+                # Fallback to CSV if Excel writing fails
+                excel_csv_path = os.path.join(self.output_dir, "staining_analysis_report.csv")
+                excel_df.to_csv(excel_csv_path, index=False)
+                print(f"Saved as CSV instead: {excel_csv_path}")
 
         # Calculate summary statistics
         total_count = results_df['Total_Nuclei_Count'].sum()
@@ -872,6 +930,12 @@ class NucleiCounter:
         avg_count = results_df['Total_Nuclei_Count'].mean()
         total_red_dots = results_df['Red_Dot_Count'].sum()
         avg_red_dots = results_df['Red_Dot_Count'].mean()
+        
+        # Calculate overall average dot size
+        overall_avg_dot_size = 0
+        if all_red_dots:
+            all_dots_df = pd.DataFrame(all_red_dots)
+            overall_avg_dot_size = all_dots_df['Area_Microns'].mean()
 
         # Show completion message
         messagebox.showinfo(
@@ -882,8 +946,10 @@ class NucleiCounter:
             f"- Manually added: {manual_count}\n"
             f"Average nuclei per image: {avg_count:.2f}\n\n"
             f"Total red dots detected: {total_red_dots}\n"
-            f"Average red dots per image: {avg_red_dots:.2f}\n\n"
-            f"Results saved to {self.output_dir}"
+            f"Average red dots per image: {avg_red_dots:.2f}\n"
+            f"Average red dot size: {overall_avg_dot_size:.2f} μm²\n\n"
+            f"Results saved to {self.output_dir}\n"
+            f"Excel report: staining_analysis_report.xlsx"
         )
 
 
