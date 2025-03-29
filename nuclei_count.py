@@ -96,6 +96,10 @@ class NucleiCounter:
         self.param_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
         self.param_frame.pack_propagate(False)  # Prevent frame from shrinking
 
+        # Initialize param_status for tracking parameter changes
+        self.param_status = ttk.Label(self.param_frame, text="Using default parameters")
+        self.param_status.pack(anchor="w", pady=5)
+
         # Right frame for previews and navigation - ensure it takes the remaining space
         preview_frame = ttk.LabelFrame(content_frame, text="Preview & Navigation", padding=10)
         preview_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -111,12 +115,8 @@ class NucleiCounter:
         # Nuclei count indicator
         self.count_label = ttk.Label(nav_frame, text="Nuclei count: 0", font=("Arial", 12, "bold"))
         self.count_label.pack(side=tk.RIGHT, pady=5)
-
-        # Canvas for matplotlib
-        self.canvas_frame = ttk.Frame(preview_frame)
-        self.canvas_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-
-        # Navigation buttons - Use fixed width buttons
+        
+        # Navigation buttons - Above the image preview
         buttons_frame = ttk.Frame(preview_frame)
         buttons_frame.pack(fill=tk.X, pady=10)
 
@@ -127,20 +127,33 @@ class NucleiCounter:
         buttons_frame.columnconfigure(3, weight=1)
 
         self.prev_btn = ttk.Button(buttons_frame, text="← Previous", command=self.move_to_prev_image, state=tk.DISABLED,
-                                   width=15)
+                                  width=15)
         self.prev_btn.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
 
         self.save_btn = ttk.Button(buttons_frame, text="Save Current", command=self.save_current_image,
-                                   state=tk.DISABLED, width=15)
+                                  state=tk.DISABLED, width=15)
         self.save_btn.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
 
         self.next_btn = ttk.Button(buttons_frame, text="Save & Next →", command=self.move_to_next_image,
-                                   state=tk.DISABLED, width=15)
+                                  state=tk.DISABLED, width=15)
         self.next_btn.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
 
         self.process_all_btn = ttk.Button(buttons_frame, text="Process All Remaining", command=self.process_remaining,
-                                          state=tk.DISABLED, width=15)
+                                         state=tk.DISABLED, width=15)
         self.process_all_btn.grid(row=0, column=3, padx=5, pady=5, sticky="ew")
+
+        # Canvas for matplotlib
+        self.canvas_frame = ttk.Frame(preview_frame)
+        self.canvas_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Add a footer status frame
+        status_frame = ttk.Frame(preview_frame)
+        status_frame.pack(fill=tk.X, pady=5)
+        
+        # Status indicator with larger font for better visibility
+        self.ui_status = ttk.Label(status_frame, text="Please select a folder with TIFF images", 
+                                  font=("Arial", 12), foreground="blue")
+        self.ui_status.pack(side=tk.LEFT, pady=5, padx=10)
 
     def select_and_load_folder(self):
         """Select a folder and load the first image"""
@@ -174,12 +187,21 @@ class NucleiCounter:
             self.save_btn.config(state=tk.NORMAL)
             self.next_btn.config(state=tk.NORMAL)
             self.process_all_btn.config(state=tk.NORMAL)
-
+            print("Buttons have been enabled")
+            
+            # Make buttons more visible
+            self.save_btn.config(width=20)
+            self.next_btn.config(width=20)
+            
+            # Update UI status to make it clear the app is ready
+            self.ui_status.config(text="Image loaded - Ready to process!", foreground="green")
+            
             # Create parameter sliders
             self.create_parameter_sliders()
         else:
             messagebox.showerror("Error", "Failed to load the first image.")
             print("Failed to load the first image.")
+            self.ui_status.config(text="Error loading image. Please try again.", foreground="red")
 
     def create_parameter_sliders(self):
         """Create sliders for each parameter"""
