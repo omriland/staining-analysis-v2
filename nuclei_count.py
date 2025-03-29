@@ -1,392 +1,431 @@
 import os
-import cv2
+import sys
 import numpy as np
-import matplotlib.pyplot as plt
 import pandas as pd
+import cv2
+from skimage import io, morphology, measure, segmentation, filters, feature
+from matplotlib import pyplot as plt
+from matplotlib.widgets import Slider, Button
 import tkinter as tk
-from tkinter import filedialog, Scale, Button, Label, Frame, Toplevel, messagebox
-from tkinter.messagebox import askyesno
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from skimage import feature, measure, morphology, segmentation
-from scipy.ndimage import distance_transform_edt
+from tkinter import filedialog, simpledialog
+from tkinter import ttk
+import matplotlib
+
+matplotlib.use('TkAgg')
 
 
-class NucleiCounterApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Nuclei Counter")
-        self.root.geometry("800x600")
+class NucleiCounter:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.withdraw()  # Hide the main window
 
         # Default parameters
-        self.blue_threshold = 150  # For blue channel thresholding
-        self.min_size = 100  # Minimum nucleus size in pixels
-        self.max_size = 1000  # Maximum nucleus size in pixels
-        self.separation_factor = 5  # For separating connected nuclei
-
-        self.images_folder = ""
-        self.output_folder = ""
-        self.image_files = []
-        self.preview_images = []
-        self.current_preview_index = 0
-
-        self.setup_ui()
-
-    def setup_ui(self):
-        # Main frame
-        main_frame = Frame(self.root)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        # Header
-        header_label = Label(main_frame, text="Nuclei Counter", font=("Arial", 16, "bold"))
-        header_label.pack(pady=10)
-
-        # Folder selection
-        folder_frame = Frame(main_frame)
-        folder_frame.pack(fill=tk.X, pady=5)
-
-        Label(folder_frame, text="Select folder with TIFF images:").pack(side=tk.LEFT)
-        Button(folder_frame, text="Browse", command=self.select_folder).pack(side=tk.RIGHT)
-
-        # Selected folder display
-        self.folder_label = Label(main_frame, text="No folder selected", fg="gray")
-        self.folder_label.pack(fill=tk.X, pady=5)
-
-        # Parameter adjustment frame
-        param_frame = Frame(main_frame)
-        param_frame.pack(fill=tk.X, pady=10)
-
-        param_header = Label(param_frame, text="Adjust Parameters", font=("Arial", 12, "bold"))
-        param_header.pack(pady=5)
-
-        # Blue threshold slider
-        thresh_frame = Frame(param_frame)
-        thresh_frame.pack(fill=tk.X, pady=5)
-        Label(thresh_frame, text="Blue Channel Threshold:").pack(side=tk.LEFT)
-        self.thresh_slider = Scale(thresh_frame, from_=0, to=255, orient=tk.HORIZONTAL,
-                                   length=300, variable=tk.IntVar(value=self.blue_threshold))
-        self.thresh_slider.pack(side=tk.RIGHT)
-
-        # Min size slider
-        min_size_frame = Frame(param_frame)
-        min_size_frame.pack(fill=tk.X, pady=5)
-        Label(min_size_frame, text="Minimum Nucleus Size (pixels):").pack(side=tk.LEFT)
-        self.min_size_slider = Scale(min_size_frame, from_=10, to=500, orient=tk.HORIZONTAL,
-                                     length=300, variable=tk.IntVar(value=self.min_size))
-        self.min_size_slider.pack(side=tk.RIGHT)
-
-        # Max size slider
-        max_size_frame = Frame(param_frame)
-        max_size_frame.pack(fill=tk.X, pady=5)
-        Label(max_size_frame, text="Maximum Nucleus Size (pixels):").pack(side=tk.LEFT)
-        self.max_size_slider = Scale(max_size_frame, from_=500, to=5000, orient=tk.HORIZONTAL,
-                                     length=300, variable=tk.IntVar(value=self.max_size))
-        self.max_size_slider.pack(side=tk.RIGHT)
-
-        # Separation factor slider
-        sep_frame = Frame(param_frame)
-        sep_frame.pack(fill=tk.X, pady=5)
-        Label(sep_frame, text="Separation Factor (lower for more separation):").pack(side=tk.LEFT)
-        self.sep_slider = Scale(sep_frame, from_=1, to=20, orient=tk.HORIZONTAL,
-                                length=300, variable=tk.IntVar(value=self.separation_factor))
-        self.sep_slider.pack(side=tk.RIGHT)
-
-        # Action buttons
-        button_frame = Frame(main_frame)
-        button_frame.pack(fill=tk.X, pady=10)
-
-        Button(button_frame, text="Show Preview", command=self.show_preview, width=15).pack(side=tk.LEFT, padx=5)
-        Button(button_frame, text="Process All Images", command=self.process_all_images, width=15).pack(side=tk.RIGHT,
-                                                                                                        padx=5)
-
-    def select_folder(self):
-        self.images_folder = filedialog.askdirectory(title="Select folder with TIFF images")
-        if self.images_folder:
-            self.folder_label.config(text=f"Selected: {self.images_folder}", fg="black")
-
-            # Find all TIFF files
-            self.image_files = [f for f in os.listdir(self.images_folder)
-                                if f.lower().endswith(('.tif', '.tiff'))]
-
-            if not self.image_files:
-                messagebox.showinfo("No Images", "No TIFF images found in the selected folder.")
-            else:
-                # Create output folder
-                self.output_folder = os.path.join(self.images_folder, "nuclei_results")
-                os.makedirs(self.output_folder, exist_ok=True)
-
-                # Select two images for preview
-                self.preview_images = self.image_files[:2] if len(self.image_files) >= 2 else self.image_files
-                self.current_preview_index = 0
-
-                messagebox.showinfo("Files Found",
-                                    f"Found {len(self.image_files)} TIFF images. Click 'Show Preview' to test current settings.")
-
-    def show_preview(self):
-        if not self.preview_images:
-            messagebox.showinfo("No Preview", "Please select a folder with TIFF images first.")
-            return
-
-        # Get current parameter values
-        self.blue_threshold = self.thresh_slider.get()
-        self.min_size = self.min_size_slider.get()
-        self.max_size = self.max_size_slider.get()
-        self.separation_factor = self.sep_slider.get()
-
-        # Create preview window
-        preview_window = Toplevel(self.root)
-        preview_window.title("Preview - Nuclei Detection")
-        preview_window.geometry("1000x800")
-
-        # Process current preview image
-        current_image = self.preview_images[self.current_preview_index]
-        img_path = os.path.join(self.images_folder, current_image)
-
-        try:
-            # Process image and get results
-            result_dict = self.process_image(img_path)
-
-            # Create figure for displaying images
-            fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
-
-            # Display original image
-            ax1.imshow(result_dict['original'])
-            ax1.set_title("Original Image")
-            ax1.axis('off')
-
-            # Display blue channel
-            ax2.imshow(result_dict['blue_enhanced'])
-            ax2.set_title("Enhanced Blue Channel")
-            ax2.axis('off')
-
-            # Display binary mask
-            ax3.imshow(result_dict['binary'], cmap='gray')
-            ax3.set_title(f"Thresholded (value: {self.blue_threshold})")
-            ax3.axis('off')
-
-            # Display processed image with detections
-            ax4.imshow(result_dict['processed'])
-            ax4.set_title(f"Detected Nuclei: {result_dict['count']}")
-            ax4.axis('off')
-
-            # Add canvas to window
-            canvas = FigureCanvasTkAgg(fig, master=preview_window)
-            canvas.draw()
-            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-            # Feedback text
-            feedback_text = """Adjustment Guide:
-- If some nuclei are not detected (missing yellow outlines): Decrease the Blue Threshold
-- If too many non-nuclei regions are detected: Increase the Blue Threshold
-- If connected nuclei are not separated: Decrease the Separation Factor
-- If single nuclei are split into multiple: Increase the Separation Factor
-- If small artifacts are detected: Increase Minimum Nucleus Size
-- If large nuclei are not detected: Increase Maximum Nucleus Size"""
-
-            Label(preview_window, text=feedback_text, justify=tk.LEFT, font=("Arial", 10)).pack(pady=10)
-
-            # Navigation and action buttons
-            button_frame = Frame(preview_window)
-            button_frame.pack(fill=tk.X, pady=10)
-
-            # Show image name and navigation controls
-            image_label = Label(button_frame,
-                                text=f"Image: {current_image} ({self.current_preview_index + 1}/{len(self.preview_images)})")
-            image_label.pack(side=tk.TOP, pady=5)
-
-            nav_frame = Frame(button_frame)
-            nav_frame.pack(side=tk.TOP, pady=5)
-
-            Button(nav_frame, text="Previous Image",
-                   command=lambda: self.navigate_preview(-1, preview_window)).pack(side=tk.LEFT, padx=5)
-
-            Button(nav_frame, text="Next Image",
-                   command=lambda: self.navigate_preview(1, preview_window)).pack(side=tk.LEFT, padx=5)
-
-            # Action buttons
-            action_frame = Frame(button_frame)
-            action_frame.pack(side=tk.BOTTOM, pady=10)
-
-            Button(action_frame, text="Accept Settings", width=15,
-                   command=lambda: self.accept_settings(preview_window)).pack(side=tk.LEFT, padx=10)
-
-            Button(action_frame, text="Adjust Parameters", width=15,
-                   command=preview_window.destroy).pack(side=tk.RIGHT, padx=10)
-
-        except Exception as e:
-            preview_window.destroy()
-            messagebox.showerror("Error", f"Error processing image: {str(e)}")
-
-    def navigate_preview(self, direction, window):
-        # Change preview image index
-        self.current_preview_index = (self.current_preview_index + direction) % len(self.preview_images)
-        window.destroy()
-        self.show_preview()
-
-    def accept_settings(self, window):
-        # Ask for confirmation
-        response = askyesno("Confirm",
-                            "Are you satisfied with the current settings?\nDo you want to process all images?")
-        if response:
-            window.destroy()
-            self.process_all_images()
-
-    def process_image(self, image_path):
-        # Read the image using OpenCV
-        img = cv2.imread(image_path)
-        if img is None:
-            raise ValueError(f"Could not read image: {image_path}")
-
-        # Add debug print to help diagnose issues
-        print(f"Image shape: {img.shape}, dtype: {img.dtype}")
-        print(f"Image min/max values: {np.min(img)}/{np.max(img)}")
-
-        # Convert BGR to RGB for display
-        original_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-        # For fluorescence images, we want the blue channel
-        # In BGR format, the channels are:
-        # B: 0, G: 1, R: 2
-        # Let's extract the blue channel
-        blue_channel = img[:, :, 0].copy()
-
-        # Enhance contrast in the blue channel
-        blue_channel_enhanced = cv2.equalizeHist(blue_channel)
-
-        # Create a debug image to see what's happening with the blue channel
-        blue_enhanced_img = original_rgb.copy()
-        blue_enhanced_img[:, :,
-        2] = blue_channel_enhanced  # Enhance the red channel in the debug image for better visualization
-
-        # Threshold the blue channel
-        _, binary = cv2.threshold(blue_channel_enhanced, self.blue_threshold, 255, cv2.THRESH_BINARY)
-
-        # Clean up binary image
-        kernel = np.ones((3, 3), np.uint8)
-        opening = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=2)
-
-        # Remove small objects
-        labeled = measure.label(opening > 0)
-        filtered = morphology.remove_small_objects(labeled, min_size=self.min_size)
-        mask = filtered > 0
-
-        # Apply distance transform to separate connected nuclei
-        distance = distance_transform_edt(mask)
-
-        # Create peaks for watershed
-        # The separation factor is used as min_distance - lower value will find more peaks
-        coords = feature.peak_local_max(
-            distance,
-            min_distance=self.separation_factor,
-            labels=filtered
-        )
-
-        # Create markers for watershed
-        markers = np.zeros_like(mask, dtype=np.uint8)
-        if len(coords) > 0:  # Check if any peaks were found
-            markers[tuple(coords.T)] = 1
-        markers = measure.label(markers)
-
-        # Apply watershed segmentation
-        segmented = segmentation.watershed(-distance, markers, mask=mask)
-
-        # Filter objects by size
-        props = measure.regionprops(segmented)
-        valid_regions = []
-
-        for prop in props:
-            if self.min_size <= prop.area <= self.max_size:
-                valid_regions.append(prop.label)
-
-        # Create mask for valid nuclei
-        nucleus_mask = np.zeros_like(segmented, dtype=bool)
-        for label in valid_regions:
-            nucleus_mask[segmented == label] = True
-
-        # Create output image with overlay
-        processed = original_rgb.copy()
-
-        # Draw yellow outlines around detected nuclei
-        for label in valid_regions:
-            # Create mask for the current region
-            region_mask = (segmented == label).astype(np.uint8)
-            # Find contours
-            contours, _ = cv2.findContours(region_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            # Draw contour
-            cv2.drawContours(processed, contours, -1, (255, 255, 0), 2)
-
-        # Return all results in a dictionary
-        return {
-            'original': original_rgb,
-            'blue_enhanced': blue_enhanced_img,
-            'binary': binary,
-            'processed': processed,
-            'count': len(valid_regions)
+        self.params = {
+            'blue_threshold': 50,  # Threshold for blue channel
+            'min_size': 100,  # Minimum nucleus size in pixels
+            'max_size': 3000,  # Maximum nucleus size in pixels
+            'dilation_size': 5,  # Size of dilation kernel to connect fragments
+            'closing_size': 7,  # Size of closing kernel
+            'distance_threshold': 7  # Distance threshold for connecting fragments
         }
 
-    def process_all_images(self):
-        if not self.image_files:
-            messagebox.showinfo("No Images", "Please select a folder with TIFF images first.")
+        # UI elements
+        self.preview_fig = None
+        self.preview_axs = None
+        self.binary_img = None
+        self.result_img = None
+        self.param_window = None
+        self.selector_window = None
+        self.sliders = {}
+        self.selected_image = None
+
+        # Data
+        self.current_image = None
+        self.current_filename = None
+        self.output_dir = None
+        self.total_results = []
+        self.process_all = False
+
+    def select_input_folder(self):
+        """Let user select a folder containing TIFF images"""
+        input_dir = filedialog.askdirectory(title="Select folder with TIFF images")
+        if not input_dir:
+            print("No folder selected. Exiting.")
+            sys.exit()
+
+        # Create output directory
+        self.output_dir = os.path.join(input_dir, "nuclei_results")
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        # Get list of TIFF files
+        tiff_files = [f for f in os.listdir(input_dir) if f.lower().endswith(('.tif', '.tiff'))]
+        if not tiff_files:
+            print(f"No TIFF files found in {input_dir}. Exiting.")
+            sys.exit()
+
+        return input_dir, tiff_files
+
+    def adjust_parameters(self):
+        """GUI for adjusting parameters with live preview updates"""
+        param_window = tk.Toplevel(self.root)
+        param_window.title("Adjust Parameters")
+        param_window.geometry("400x350")
+
+        # Create a frame for parameters
+        frame = ttk.Frame(param_window, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        # Add sliders for each parameter
+        row = 0
+        sliders = {}
+
+        # Parameter ranges and step sizes
+        param_configs = {
+            'blue_threshold': (0, 255, 1),
+            'min_size': (10, 500, 10),
+            'max_size': (500, 10000, 100),
+            'dilation_size': (0, 20, 1),
+            'closing_size': (0, 20, 1),
+            'distance_threshold': (1, 30, 1)
+        }
+
+        # First, load image and initialize preview figure
+        if self.current_image is None:
+            print("No image loaded for preview")
             return
 
-        # Get current parameter values
-        self.blue_threshold = self.thresh_slider.get()
-        self.min_size = self.min_size_slider.get()
-        self.max_size = self.max_size_slider.get()
-        self.separation_factor = self.sep_slider.get()
+        # Initialize the preview figure
+        if self.preview_fig is None:
+            self.preview_fig, axs = plt.subplots(2, 2, figsize=(12, 10))
+            self.preview_fig.canvas.manager.set_window_title("Live Preview")
+            self.preview_axs = axs.ravel()
 
-        # Create results dataframe
-        results = []
+            # Display original image with correct colors (static)
+            if len(self.current_image[0].shape) == 3:
+                # Handle the image based on how it was loaded
+                # If using cv2 (BGR), convert to RGB, if using io.imread (RGB), keep as is
+                # We assume io.imread was used which loads in RGB format by default
+                self.preview_axs[0].imshow(self.current_image[0])
+            else:
+                self.preview_axs[0].imshow(self.current_image[0], cmap='gray')
+            self.preview_axs[0].set_title("Original Image")
 
-        # Process each image
-        progress_window = Toplevel(self.root)
-        progress_window.title("Processing Images")
-        progress_window.geometry("600x100")
+            # Display blue channel (static)
+            self.preview_axs[1].imshow(self.current_image[1], cmap='Blues')
+            self.preview_axs[1].set_title("Blue Channel (DAPI)")
 
-        progress_label = Label(progress_window, text="Processing images...")
-        progress_label.pack(pady=20)
+            # Initialize placeholders for dynamic images
+            self.binary_img = self.preview_axs[2].imshow(np.zeros_like(self.current_image[1]), cmap='gray')
+            self.preview_axs[2].set_title("Binary (Thresholded) Image")
 
-        progress_window.update()
+            self.result_img = self.preview_axs[3].imshow(self.current_image[0])
+            self.preview_axs[3].set_title("Detection Result")
 
-        successful = 0
-        for i, image_file in enumerate(self.image_files):
-            # Update progress
-            progress_label.config(text=f"Processing image {i + 1}/{len(self.image_files)}: {image_file}")
-            progress_window.update()
+            plt.tight_layout()
+            self.preview_fig.subplots_adjust(top=0.9)
+            plt.ion()  # Turn on interactive mode
+            plt.show()
 
-            # Process image
-            img_path = os.path.join(self.images_folder, image_file)
-            try:
-                result_dict = self.process_image(img_path)
-                processed = result_dict['processed']
-                count = result_dict['count']
+        # Create sliders with live update functionality
+        for param, value in self.params.items():
+            label = ttk.Label(frame, text=param.replace('_', ' ').title())
+            label.grid(row=row, column=0, sticky=tk.W, pady=5)
 
-                # Save processed image
-                output_path = os.path.join(self.output_folder, f"marked_{image_file}")
-                cv2.imwrite(output_path, cv2.cvtColor(processed, cv2.COLOR_RGB2BGR))
+            min_val, max_val, step = param_configs[param]
 
-                # Add result to dataframe
-                results.append({"Image": image_file, "Nuclei Count": count})
-                successful += 1
-            except Exception as e:
-                messagebox.showerror("Error", f"Error processing {image_file}: {str(e)}")
+            var = tk.IntVar(value=value)
+            slider = ttk.Scale(
+                frame, from_=min_val, to=max_val,
+                variable=var, orient=tk.HORIZONTAL,
+                length=200, command=lambda v, p=param, var=var: self._update_param_live(p, int(float(var.get())))
+            )
+            slider.grid(row=row, column=1, padx=5, pady=5)
 
-        # Save results to CSV
-        df = pd.DataFrame(results)
-        csv_path = os.path.join(self.output_folder, "nuclei_counts.csv")
-        df.to_csv(csv_path, index=False)
+            value_label = ttk.Label(frame, text=str(value))
+            value_label.grid(row=row, column=2, padx=5)
 
-        progress_window.destroy()
+            sliders[param] = (var, value_label)
+            row += 1
 
-        # Show completion message
-        message = f"Processing complete!\n\n"
-        message += f"Successfully processed {successful}/{len(self.image_files)} images.\n"
-        message += f"Results saved to {self.output_folder}\n\n"
-        message += f"CSV file: {os.path.basename(csv_path)}"
+            # Set initial value and trace changes
+            var.trace_add("write", lambda *args, p=param, v=var, l=value_label:
+            l.config(text=str(int(float(v.get())))))
 
-        messagebox.showinfo("Processing Complete", message)
+        # Update preview initially
+        self._update_preview()
+
+        # Add process all button
+        process_button = ttk.Button(frame, text="Process All Files", command=self._on_process_all)
+        process_button.grid(row=row, column=0, columnspan=3, pady=15)
+
+        # Keep reference to widgets
+        self.param_window = param_window
+        self.sliders = sliders
+
+        return param_window
+
+    def _update_param_live(self, param, value):
+        """Update parameter value and refresh preview in real-time"""
+        self.params[param] = value
+        self._update_preview()
+
+    def _update_preview(self):
+        """Update the preview with current parameters"""
+        if self.current_image is None:
+            return
+
+        # Process the image with current parameters
+        binary, nuclei_mask, result_img, count = self.process_image(
+            self.current_image[0], self.current_image[1])
+
+        # Update the preview figure
+        if self.preview_fig:
+            # Update binary image
+            self.binary_img.set_data(binary)
+
+            # Update result image with correct color display
+            if len(result_img.shape) == 3:
+                # If using OpenCV to create result image, convert BGR to RGB for display
+                if np.array_equal(result_img[:, :, 0], self.current_image[0][:, :, 2]) and \
+                        np.array_equal(result_img[:, :, 2], self.current_image[0][:, :, 0]):
+                    # This indicates BGR order needs conversion
+                    self.result_img.set_data(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB))
+                else:
+                    # Image is already in correct color order
+                    self.result_img.set_data(result_img)
+            else:
+                self.result_img.set_data(result_img)
+
+            # Update title with count
+            self.preview_fig.suptitle(f"Preview: {self.current_filename} - {count} nuclei detected")
+
+            # Refresh the canvas
+            self.preview_fig.canvas.draw_idle()
+            self.preview_fig.canvas.flush_events()
+
+    def _on_process_all(self):
+        """Close parameter window and signal to process all files"""
+        self.param_window.destroy()
+        if self.preview_fig:
+            plt.close(self.preview_fig)
+        self.process_all = True
+
+    def load_image(self, image_path):
+        """Load an image and extract the blue channel"""
+        try:
+            # Read the image using scikit-image (loads in RGB format)
+            image = io.imread(image_path)
+
+            # Handle grayscale images
+            if len(image.shape) == 2:
+                return image, image
+
+            # For color images, extract blue channel
+            if len(image.shape) == 3:
+                if image.shape[2] == 3:  # RGB
+                    # In RGB order, blue is channel 2 (index 2)
+                    blue_channel = image[:, :, 2]
+                    return image, blue_channel
+                elif image.shape[2] == 4:  # RGBA
+                    blue_channel = image[:, :, 2]
+                    return image, blue_channel
+
+            print(f"Unexpected image format: {image.shape}")
+            return None, None
+
+        except Exception as e:
+            print(f"Error loading image {image_path}: {e}")
+            return None, None
+
+    def process_image(self, image, blue_channel):
+        """Process image to detect nuclei"""
+        # Apply Gaussian blur to reduce noise
+        blurred = cv2.GaussianBlur(blue_channel, (5, 5), 0)
+
+        # Apply threshold to get binary image
+        _, binary = cv2.threshold(blurred, self.params['blue_threshold'], 255, cv2.THRESH_BINARY)
+
+        # Apply morphological operations to connect fragments
+        if self.params['closing_size'] > 0:
+            closing_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                                       (self.params['closing_size'], self.params['closing_size']))
+            binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, closing_kernel)
+
+        if self.params['dilation_size'] > 0:
+            dilation_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                                        (self.params['dilation_size'], self.params['dilation_size']))
+            binary = cv2.dilate(binary, dilation_kernel, iterations=1)
+            binary = cv2.erode(binary, dilation_kernel, iterations=1)
+
+        # Label connected components
+        labels = measure.label(binary)
+        regions = measure.regionprops(labels)
+
+        # Filter by size and create a mask for valid nuclei
+        valid_labels = [region.label for region in regions
+                        if self.params['min_size'] <= region.area <= self.params['max_size']]
+
+        nuclei_mask = np.zeros_like(binary)
+        for label in valid_labels:
+            nuclei_mask[labels == label] = 255
+
+        # Create a result image with outlines
+        if len(image.shape) == 2:  # Grayscale
+            result_img = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        else:
+            result_img = image.copy()
+
+        # Find contours of nuclei
+        contours, _ = cv2.findContours(nuclei_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Draw contours and number them
+        for i, contour in enumerate(contours):
+            cv2.drawContours(result_img, [contour], -1, (0, 255, 255), 2)
+            M = cv2.moments(contour)
+            if M["m00"] != 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                cv2.putText(result_img, str(i + 1), (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+        return binary, nuclei_mask, result_img, len(contours)
+
+    def show_preview(self):
+        """This method is kept for backward compatibility but is now handled automatically
+        by the live preview functionality"""
+        self._update_preview()
+
+    def process_files(self, input_dir, tiff_files):
+        """Process all files or show preview"""
+        self.process_all = False
+
+        # Load the first image for preview
+        first_image_path = os.path.join(input_dir, tiff_files[0])
+        self.current_filename = tiff_files[0]
+        self.current_image = self.load_image(first_image_path)
+
+        # Create a dropdown to select images for preview
+        if len(tiff_files) > 1:
+            self.setup_image_selector(input_dir, tiff_files)
+
+        # Show parameter adjustment window with live preview
+        param_window = self.adjust_parameters()
+        self.root.wait_window(param_window)
+
+        # Close preview figure if still open
+        if self.preview_fig:
+            plt.close(self.preview_fig)
+            self.preview_fig = None
+
+        # If process_all is True, process all files
+        if self.process_all:
+            print(f"Processing {len(tiff_files)} files...")
+
+            for i, filename in enumerate(tiff_files):
+                image_path = os.path.join(input_dir, filename)
+                print(f"Processing {i + 1}/{len(tiff_files)}: {filename}")
+
+                # Load and process image
+                image, blue_channel = self.load_image(image_path)
+                if image is None:
+                    continue
+
+                binary, nuclei_mask, result_img, count = self.process_image(image, blue_channel)
+
+                # Save result image
+                output_path = os.path.join(self.output_dir, f"result_{filename}")
+                io.imsave(output_path, result_img)
+
+                # Store results
+                self.total_results.append({
+                    'Filename': filename,
+                    'Nuclei_Count': count
+                })
+
+            # Save results to CSV
+            results_df = pd.DataFrame(self.total_results)
+            csv_path = os.path.join(self.output_dir, "nuclei_counts.csv")
+            results_df.to_csv(csv_path, index=False)
+
+            print(f"Processing complete. Results saved to {self.output_dir}")
+            print(f"CSV results saved to {csv_path}")
+
+            # Show summary statistics
+            total_count = results_df['Nuclei_Count'].sum()
+            avg_count = results_df['Nuclei_Count'].mean()
+            print(f"Total nuclei detected: {total_count}")
+            print(f"Average nuclei per image: {avg_count:.2f}")
+
+    def setup_image_selector(self, input_dir, tiff_files):
+        """Create a dropdown to select different images for preview"""
+        selector_window = tk.Toplevel(self.root)
+        selector_window.title("Image Selector")
+        selector_window.geometry("400x100")
+
+        frame = ttk.Frame(selector_window, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text="Select image for preview:").grid(row=0, column=0, sticky=tk.W, pady=5)
+
+        # Create string variable for dropdown
+        self.selected_image = tk.StringVar(value=tiff_files[0])
+
+        # Create dropdown
+        dropdown = ttk.Combobox(frame, textvariable=self.selected_image)
+        dropdown['values'] = tiff_files
+        dropdown.grid(row=0, column=1, padx=5, pady=5)
+
+        # Load button
+        load_btn = ttk.Button(
+            frame,
+            text="Load Selected Image",
+            command=lambda: self._load_selected_image(input_dir)
+        )
+        load_btn.grid(row=1, column=0, columnspan=2, pady=10)
+
+        self.selector_window = selector_window
+
+    def _load_selected_image(self, input_dir):
+        """Load the selected image and update preview"""
+        filename = self.selected_image.get()
+        image_path = os.path.join(input_dir, filename)
+
+        # Load new image
+        self.current_filename = filename
+        self.current_image = self.load_image(image_path)
+
+        # Update preview if it exists
+        if self.preview_fig:
+            # Update static parts (original and blue channel)
+            self.preview_axs[0].clear()
+            if len(self.current_image[0].shape) == 3:
+                # Display with correct colors
+                self.preview_axs[0].imshow(self.current_image[0])
+            else:
+                self.preview_axs[0].imshow(self.current_image[0], cmap='gray')
+            self.preview_axs[0].set_title("Original Image")
+
+            self.preview_axs[1].clear()
+            self.preview_axs[1].imshow(self.current_image[1], cmap='Blues')
+            self.preview_axs[1].set_title("Blue Channel")
+
+            # Update dynamic parts
+            self._update_preview()
+
+    def run(self):
+        """Main function to run the nuclei counter"""
+        print("=== DAPI-Stained Nuclei Counter ===")
+
+        # Select input folder with TIFF files
+        input_dir, tiff_files = self.select_input_folder()
+        print(f"Selected folder: {input_dir}")
+        print(f"Found {len(tiff_files)} TIFF files")
+
+        # Process files
+        self.process_files(input_dir, tiff_files)
+
+        print("Program finished.")
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = NucleiCounterApp(root)
-    root.mainloop()
+    counter = NucleiCounter()
+    counter.run()
