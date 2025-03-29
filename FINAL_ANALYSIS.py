@@ -811,6 +811,8 @@ class NucleiCounter:
         # Process red channel if the image is RGB
         red_dots = []
         green_dots = []
+        total_green_area_microns = 0  # Initialize total green area
+        
         if len(image.shape) == 3 and image.shape[2] >= 3:
             # Extract red channel
             red_channel = image[:, :, 0]  # red channel is index 0 in RGB
@@ -863,18 +865,25 @@ class NucleiCounter:
                     cv2.putText(result_img, f"R{i+1}: {area_microns:.2f}μm²", 
                               (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
             
-            # Process green channel if requested
+            # Always extract green channel for total area, regardless of analyze_green_dots setting
+            green_channel = image[:, :, 1]  # green channel is index 1 in RGB
+            
+            # Default threshold for green channel if not analyzing green dots
+            green_threshold = self.params.get('green_threshold', 100)
+            
+            # Apply Gaussian blur
+            blurred_green = cv2.GaussianBlur(green_channel, (5, 5), 0)
+            
+            # Apply threshold to get binary image of green areas
+            _, green_binary = cv2.threshold(blurred_green, green_threshold, 255, cv2.THRESH_BINARY)
+            
+            # Calculate total green area in microns (all pixels above threshold)
+            total_green_pixels = np.sum(green_binary > 0)
+            total_green_area_microns = total_green_pixels / (self.MICRON_CONVERSION * self.MICRON_CONVERSION)
+            
+            # Process green dots if requested (individual dots analysis)
             if self.analyze_green_dots:
-                # Extract green channel
-                green_channel = image[:, :, 1]  # green channel is index 1 in RGB
-                
-                # Apply Gaussian blur
-                blurred_green = cv2.GaussianBlur(green_channel, (5, 5), 0)
-                
-                # Apply threshold to get binary image of green dots
-                _, green_binary = cv2.threshold(blurred_green, self.params['green_threshold'], 255, cv2.THRESH_BINARY)
-                
-                # Label connected components
+                # Label connected components for individual dots
                 green_labels = measure.label(green_binary)
                 green_regions = measure.regionprops(green_labels)
                 
@@ -920,6 +929,9 @@ class NucleiCounter:
         self.red_dots = red_dots
         if self.analyze_green_dots:
             self.green_dots = green_dots
+            
+        # Store total green area regardless of analyze_green_dots setting
+        self.total_green_area_microns = total_green_area_microns
 
         return binary, nuclei_mask, result_img, len(contours) + len(self.manual_nuclei)
 
@@ -943,6 +955,7 @@ class NucleiCounter:
             'Manual_Nuclei_Count': len(self.manual_nuclei),
             'Total_Nuclei_Count': count,
             'Red_Dot_Count': len(self.red_dots),
+            'Total_Green_Area_Microns': self.total_green_area_microns,  # Always store total green area
             'Has_Custom_Params': self.current_filename in self.image_params
         }
         
@@ -1119,20 +1132,39 @@ class NucleiCounter:
             
             # Calculate average size of red dots in microns
             avg_red_dot_size = 0
+            total_red_area = 0
             if filename in self.stored_red_dots and len(self.stored_red_dots[filename]) > 0:
                 dots = self.stored_red_dots[filename]
-                avg_red_dot_size = sum(dot['area_microns'] for dot in dots) / len(dots)
+                total_red_area = sum(dot['area_microns'] for dot in dots)
+                avg_red_dot_size = total_red_area / len(dots)
+            
+            # Calculate total red area to blue nuclei ratio
+            red_area_to_nuclei_ratio = 0
+            if blue_nuclei_count > 0:
+                red_area_to_nuclei_ratio = total_red_area / blue_nuclei_count
+                
+            # Get total green area (always calculated regardless of green dot analysis setting)
+            total_green_area = result.get('Total_Green_Area_Microns', 0)
+            
+            # Calculate total green area to blue nuclei ratio
+            green_area_to_nuclei_ratio = 0
+            if blue_nuclei_count > 0:
+                green_area_to_nuclei_ratio = total_green_area / blue_nuclei_count
             
             # Create the base data for this file
             file_data = {
                 'File Name': filename,
                 'Total Blue Nuclei': blue_nuclei_count,
                 'Total Red Dots': red_dot_count,
+                'Total Red Area (μm²)': total_red_area,
                 'Red Dots / Blue Nuclei Ratio': red_ratio,
-                'Avg Red Dot Size (μm²)': avg_red_dot_size
+                'Total Red Area / Blue Nuclei (μm²)': red_area_to_nuclei_ratio,
+                'Avg Red Dot Size (μm²)': avg_red_dot_size,
+                'Total Green Area (μm²)': total_green_area,
+                'Total Green Area / Blue Nuclei (μm²)': green_area_to_nuclei_ratio
             }
             
-            # Add green dot data if applicable
+            # Add individual green dot data if applicable
             if self.analyze_green_dots:
                 green_dot_count = result.get('Green_Dot_Count', 0)
                 
@@ -1143,9 +1175,11 @@ class NucleiCounter:
                 
                 # Calculate average size of green dots in microns
                 avg_green_dot_size = 0
+                total_analyzed_green_area = 0
                 if filename in self.stored_green_dots and len(self.stored_green_dots[filename]) > 0:
                     dots = self.stored_green_dots[filename]
-                    avg_green_dot_size = sum(dot['area_microns'] for dot in dots) / len(dots)
+                    total_analyzed_green_area = sum(dot['area_microns'] for dot in dots)
+                    avg_green_dot_size = total_analyzed_green_area / len(dots)
                 
                 # Add green dot columns
                 file_data.update({
@@ -1191,6 +1225,7 @@ class NucleiCounter:
         avg_count = results_df['Total_Nuclei_Count'].mean()
         total_red_dots = results_df['Red_Dot_Count'].sum()
         avg_red_dots = results_df['Red_Dot_Count'].mean()
+        avg_total_green_area = results_df['Total_Green_Area_Microns'].mean()
         
         # Green dot statistics if applicable
         total_green_dots = 0
@@ -1221,6 +1256,7 @@ class NucleiCounter:
             f"Total red dots detected: {total_red_dots}\n"
             f"Average red dots per image: {avg_red_dots:.2f}\n"
             f"Average red dot size: {overall_avg_red_dot_size:.2f} μm²\n"
+            f"Average total green area per image: {avg_total_green_area:.2f} μm²\n"
         )
         
         if self.analyze_green_dots:
