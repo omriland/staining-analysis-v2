@@ -4,6 +4,7 @@
 # Required imports
 import os
 import sys
+import traceback
 import numpy as np
 import pandas as pd
 import cv2
@@ -25,62 +26,166 @@ matplotlib.use('TkAgg')
 class NucleiCounter:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("DAPI Nuclei & Red Dot Counter")
-
-        # Default parameters
-        self.default_params = {
-            'blue_threshold': 65,  # Threshold for blue channel
-            'min_size': 153,  # Minimum nucleus size in pixels
-            'max_size': 10000,  # Maximum nucleus size in pixels
-            'dilation_size': 5,  # Size of dilation kernel to connect fragments
-            'closing_size': 4,  # Size of closing kernel
-            'distance_threshold': 15,  # Distance threshold for connecting fragments
-            'red_threshold': 100,  # Threshold for red channel
-            'red_min_size': 5,  # Minimum red dot size in pixels
-            'red_max_size': 500  # Maximum red dot size in pixels
-        }
+        self.root.title("DAPI Nuclei & Dot Counter")
         
-        # Micron conversion factor
-        self.MICRON_CONVERSION = 5.7273  # 1 micron = 5.7273 pixels
+        # Set up exception handling
+        sys.excepthook = self.handle_exception
         
-        # For storing red dots
-        self.red_dots = []
-        self.stored_red_dots = {}
-
-        # Current parameters (will be image-specific)
-        self.params = self.default_params.copy()
-
-        # Store image-specific parameters
-        self.image_params = {}
-
-        # UI elements
-        self.preview_fig = None
-        self.preview_axs = None
-        self.binary_img = None
-        self.result_img = None
-        self.param_frame = None
-        self.sliders = {}
-        self.param_modified = False  # Flag to track if parameters were modified for current image
-
-        # Data
-        self.current_image = None
-        self.current_filename = None
-        self.output_dir = None
-        self.total_results = []
-        self.current_file_index = 0
-        self.input_dir = None
-        self.tiff_files = []
-
-        # User-added nuclei storage
-        self.manual_nuclei = []
-        self.stored_manual_nuclei = {}
-
-        # Create main GUI
-        self.create_main_gui()
-
+        # Start with a small window size for the initial dialog
+        self.root.geometry("400x150")
+        self.root.update_idletasks()  # To ensure geometry is applied
+        
+        # Center the initial dialog
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        x = (screen_width - 400) // 2
+        y = (screen_height - 150) // 2
+        self.root.geometry(f"400x150+{x}+{y}")
+        
+        # Ask user if they want to analyze green dots
+        self.analyze_green_dots = False
+        self.initial_frame = ttk.Frame(self.root, padding=20)
+        self.initial_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(self.initial_frame, text="Staining Analysis Options", font=("Arial", 14, "bold")).pack(pady=(0, 15))
+        
+        self.green_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self.initial_frame, text="Analyze green dots in addition to red dots", 
+                         variable=self.green_var).pack(pady=5, anchor=tk.W)
+        
+        ttk.Button(self.initial_frame, text="Start Analysis", command=self.start_analysis).pack(pady=15)
+        
+        # Wait for user to click the Start Analysis button
+        # Don't use wait_variable here as it causes issues
+        
         # Run the main loop
         self.root.mainloop()
+        
+    def handle_exception(self, exc_type, exc_value, exc_traceback):
+        """Handle uncaught exceptions by showing a message box with the error details"""
+        # Format the exception information
+        error_msg = ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        
+        # Display error in console
+        print("ERROR:", error_msg)
+        
+        # Show in message box
+        messagebox.showerror("Application Error", 
+                            f"An error occurred:\n\n{exc_value}\n\nCheck console for full details.")
+        
+        # Call the default exception handler
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        
+    def start_analysis(self):
+        """Start the main analysis after initial options are selected"""
+        try:
+            print("Starting analysis...")
+            self.analyze_green_dots = self.green_var.get()
+            print(f"Analyze green dots: {self.analyze_green_dots}")
+            
+            # Destroy initial dialog
+            self.initial_frame.destroy()
+            
+            # Reset window size for main application
+            self.root.geometry("1200x800")
+            
+            # Default parameters
+            self.default_params = {
+                'blue_threshold': 65,  # Threshold for blue channel
+                'min_size': 153,  # Minimum nucleus size in pixels
+                'max_size': 10000,  # Maximum nucleus size in pixels
+                'dilation_size': 5,  # Size of dilation kernel to connect fragments
+                'closing_size': 4,  # Size of closing kernel
+                'distance_threshold': 15,  # Distance threshold for connecting fragments
+                'red_threshold': 100,  # Threshold for red channel
+                'red_min_size': 5,  # Minimum red dot size in pixels
+                'red_max_size': 500  # Maximum red dot size in pixels
+            }
+            
+            # Add green dot parameters if needed
+            if self.analyze_green_dots:
+                print("Adding green dot parameters")
+                self.default_params.update({
+                    'green_threshold': 100,  # Threshold for green channel
+                    'green_min_size': 5,  # Minimum green dot size in pixels
+                    'green_max_size': 500  # Maximum green dot size in pixels
+                })
+            
+            # Micron conversion factor
+            self.MICRON_CONVERSION = 5.7273  # 1 micron = 5.7273 pixels
+            
+            # For storing red dots
+            self.red_dots = []
+            self.stored_red_dots = {}
+            
+            # For storing green dots if needed
+            if self.analyze_green_dots:
+                print("Initializing green dot storage")
+                self.green_dots = []
+                self.stored_green_dots = {}
 
+            # Current parameters (will be image-specific)
+            self.params = self.default_params.copy()
+
+            # Store image-specific parameters
+            self.image_params = {}
+
+            # UI elements
+            self.preview_fig = None
+            self.preview_axs = None
+            self.binary_img = None
+            self.result_img = None
+            self.param_frame = None
+            self.sliders = {}
+            self.param_modified = False  # Flag to track if parameters were modified for current image
+
+            # Data
+            self.current_image = None
+            self.current_filename = None
+            self.output_dir = None
+            self.total_results = []
+            self.current_file_index = 0
+            self.input_dir = None
+            self.tiff_files = []
+
+            # User-added nuclei storage
+            self.manual_nuclei = []
+            self.stored_manual_nuclei = {}
+
+            print("Creating main GUI...")
+            # Create main GUI
+            self.create_main_gui()
+            print("Main GUI created successfully")
+
+        except Exception as e:
+            error_details = traceback.format_exc()
+            print(f"Error in start_analysis: {e}\n{error_details}")
+            messagebox.showerror("Error Starting Analysis", 
+                                f"An error occurred while starting the analysis: {e}\n\nSee console for details.")
+            # Recreate the initial dialog if there was an error
+            self.recreate_initial_dialog()
+        
+    def recreate_initial_dialog(self):
+        """Recreate the initial dialog if there was an error in start_analysis"""
+        # Clear any existing widgets
+        for widget in self.root.winfo_children():
+            widget.destroy()
+            
+        # Reset window size
+        self.root.geometry("400x150")
+        
+        # Recreate the initial dialog
+        self.initial_frame = ttk.Frame(self.root, padding=20)
+        self.initial_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(self.initial_frame, text="Staining Analysis Options", font=("Arial", 14, "bold")).pack(pady=(0, 15))
+        
+        self.green_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self.initial_frame, text="Analyze green dots in addition to red dots", 
+                         variable=self.green_var).pack(pady=5, anchor=tk.W)
+        
+        ttk.Button(self.initial_frame, text="Start Analysis", command=self.start_analysis).pack(pady=15)
+        
     def create_main_gui(self):
         """Create the main GUI with all necessary frames"""
         # Set window size
@@ -94,8 +199,13 @@ class NucleiCounter:
         header_frame = ttk.Frame(self.main_frame, padding=5)
         header_frame.pack(fill=tk.X, pady=5)
 
-        ttk.Label(header_frame, text="DAPI-Stained Nuclei & Red Dot Counter", font=("Arial", 16, "bold")).pack(side=tk.LEFT,
-                                                                                                     padx=5)
+        title_text = "DAPI-Stained Nuclei & Dot Counter"
+        if self.analyze_green_dots:
+            title_text += " (Red + Green)"
+        else:
+            title_text += " (Red)"
+            
+        ttk.Label(header_frame, text=title_text, font=("Arial", 16, "bold")).pack(side=tk.LEFT, padx=5)
 
         select_btn = ttk.Button(header_frame, text="Select Folder with TIFF Images",
                                 command=self.select_and_load_folder)
@@ -255,6 +365,14 @@ class NucleiCounter:
             'red_min_size': (1, 500, 10),
             'red_max_size': (1, 500, 10)
         }
+        
+        # Add green dot parameters if needed
+        if self.analyze_green_dots:
+            param_configs.update({
+                'green_threshold': (0, 255, 1),
+                'green_min_size': (1, 500, 10),
+                'green_max_size': (1, 500, 10)
+            })
 
         # Create frame for sliders
         sliders_frame = ttk.Frame(self.param_frame)
@@ -463,6 +581,13 @@ class NucleiCounter:
             self.red_dots = self.stored_red_dots[filename].copy()
         else:
             self.red_dots = []
+            
+        # Retrieve any stored green dots for this image if applicable
+        if self.analyze_green_dots:
+            if filename in self.stored_green_dots:
+                self.green_dots = self.stored_green_dots[filename].copy()
+            else:
+                self.green_dots = []
 
         # Load image-specific parameters if they exist
         if filename in self.image_params:
@@ -503,6 +628,8 @@ class NucleiCounter:
 
         # Update count label
         count_text = f"Nuclei count: {count} (Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)}) | Red dots: {len(self.red_dots)}"
+        if self.analyze_green_dots:
+            count_text += f" | Green dots: {len(self.green_dots)}"
         self.count_label.config(text=count_text)
 
         # Create or update matplotlib figure
@@ -568,6 +695,8 @@ class NucleiCounter:
 
         # Add title with count information
         title_text = f"Preview: {self.current_filename}\nNuclei: {count} (Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)}) | Red Dots: {len(self.red_dots)}"
+        if self.analyze_green_dots:
+            title_text += f" | Green Dots: {len(self.green_dots)}"
         self.preview_fig.suptitle(title_text, fontsize=12)
 
         # Add instruction about manual marking
@@ -598,6 +727,8 @@ class NucleiCounter:
 
         # Update count label
         count_text = f"Nuclei count: {count} (Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)}) | Red dots: {len(self.red_dots)}"
+        if self.analyze_green_dots:
+            count_text += f" | Green dots: {len(self.green_dots)}"
         self.count_label.config(text=count_text)
 
     def on_preview_click(self, event):
@@ -679,6 +810,7 @@ class NucleiCounter:
 
         # Process red channel if the image is RGB
         red_dots = []
+        green_dots = []
         if len(image.shape) == 3 and image.shape[2] >= 3:
             # Extract red channel
             red_channel = image[:, :, 0]  # red channel is index 0 in RGB
@@ -728,11 +860,66 @@ class NucleiCounter:
                     cx = int(M["m10"] / M["m00"])
                     cy = int(M["m01"] / M["m00"])
                     # Add dot ID and size
-                    cv2.putText(result_img, f"D{i+1}: {area_microns:.2f}μm²", 
+                    cv2.putText(result_img, f"R{i+1}: {area_microns:.2f}μm²", 
                               (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+            
+            # Process green channel if requested
+            if self.analyze_green_dots:
+                # Extract green channel
+                green_channel = image[:, :, 1]  # green channel is index 1 in RGB
+                
+                # Apply Gaussian blur
+                blurred_green = cv2.GaussianBlur(green_channel, (5, 5), 0)
+                
+                # Apply threshold to get binary image of green dots
+                _, green_binary = cv2.threshold(blurred_green, self.params['green_threshold'], 255, cv2.THRESH_BINARY)
+                
+                # Label connected components
+                green_labels = measure.label(green_binary)
+                green_regions = measure.regionprops(green_labels)
+                
+                # Filter green dots by size
+                valid_green_labels = [region.label for region in green_regions
+                                 if self.params['green_min_size'] <= region.area <= self.params['green_max_size']]
+                
+                # Create a mask for valid green dots
+                green_mask = np.zeros_like(green_binary)
+                for label in valid_green_labels:
+                    green_mask[green_labels == label] = 255
+                
+                # Find contours of green dots
+                green_contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                
+                # Draw contours on result image
+                for i, contour in enumerate(green_contours):
+                    # Calculate size in microns
+                    area_pixels = cv2.contourArea(contour)
+                    area_microns = area_pixels / (self.MICRON_CONVERSION * self.MICRON_CONVERSION)
+                    
+                    # Store the dot data
+                    green_dots.append({
+                        'id': i + 1,
+                        'area_pixels': area_pixels,
+                        'area_microns': area_microns,
+                        'contour': contour
+                    })
+                    
+                    # Draw magenta contour for green dots (to distinguish from red)
+                    cv2.drawContours(result_img, [contour], -1, (255, 0, 255), 2)
+                    
+                    # Add area label
+                    M = cv2.moments(contour)
+                    if M["m00"] != 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
+                        # Add dot ID and size
+                        cv2.putText(result_img, f"G{i+1}: {area_microns:.2f}μm²", 
+                                  (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1)
         
-        # Save detected red dots
+        # Save detected dots
         self.red_dots = red_dots
+        if self.analyze_green_dots:
+            self.green_dots = green_dots
 
         return binary, nuclei_mask, result_img, len(contours) + len(self.manual_nuclei)
 
@@ -758,7 +945,11 @@ class NucleiCounter:
             'Red_Dot_Count': len(self.red_dots),
             'Has_Custom_Params': self.current_filename in self.image_params
         }
-
+        
+        # Add green dot count if applicable
+        if self.analyze_green_dots:
+            result_entry['Green_Dot_Count'] = len(self.green_dots)
+        
         # Update or add to total results
         existing_entry = next((item for item in self.total_results
                                if item['Filename'] == self.current_filename), None)
@@ -789,12 +980,36 @@ class NucleiCounter:
                 red_dot_df = pd.DataFrame(red_dot_data)
                 red_dots_csv_path = os.path.join(self.output_dir, f"red_dots_{self.current_filename.split('.')[0]}.csv")
                 red_dot_df.to_csv(red_dots_csv_path, index=False)
+        
+        # Update stored green dots and save data if applicable
+        if self.analyze_green_dots and self.green_dots:
+            self.stored_green_dots[self.current_filename] = self.green_dots.copy()
+            
+            # Save green dot data to separate CSV
+            green_dot_data = []
+            for dot in self.green_dots:
+                green_dot_data.append({
+                    'Filename': self.current_filename,
+                    'Dot_ID': dot['id'],
+                    'Area_Pixels': dot['area_pixels'],
+                    'Area_Microns': dot['area_microns']
+                })
+            
+            if green_dot_data:
+                green_dot_df = pd.DataFrame(green_dot_data)
+                green_dots_csv_path = os.path.join(self.output_dir, f"green_dots_{self.current_filename.split('.')[0]}.csv")
+                green_dot_df.to_csv(green_dots_csv_path, index=False)
 
         # Save custom parameters if modified
         if self.param_modified:
             self.image_params[self.current_filename] = self.params.copy()
 
-        messagebox.showinfo("Saved", f"Results saved for {self.current_filename}: {count} nuclei detected, {len(self.red_dots)} red dots detected")
+        # Prepare success message
+        success_msg = f"Results saved for {self.current_filename}: {count} nuclei detected, {len(self.red_dots)} red dots detected"
+        if self.analyze_green_dots:
+            success_msg += f", {len(self.green_dots)} green dots detected"
+            
+        messagebox.showinfo("Saved", success_msg)
         return True
 
     def move_to_next_image(self):
@@ -859,12 +1074,33 @@ class NucleiCounter:
             for dot in dots:
                 all_red_dots.append({
                     'Filename': filename,
+                    'Color': 'Red',
                     'Dot_ID': dot['id'],
                     'Area_Pixels': dot['area_pixels'],
                     'Area_Microns': dot['area_microns']
                 })
         
-        if all_red_dots:
+        # Combine all green dot data into one CSV if applicable
+        all_green_dots = []
+        if self.analyze_green_dots:
+            for filename, dots in self.stored_green_dots.items():
+                for dot in dots:
+                    all_green_dots.append({
+                        'Filename': filename,
+                        'Color': 'Green',
+                        'Dot_ID': dot['id'],
+                        'Area_Pixels': dot['area_pixels'],
+                        'Area_Microns': dot['area_microns']
+                    })
+            
+            # Combine red and green dots for overall analysis
+            all_dots = all_red_dots + all_green_dots
+            if all_dots:
+                dots_df = pd.DataFrame(all_dots)
+                dots_csv_path = os.path.join(self.output_dir, "all_dots.csv")
+                dots_df.to_csv(dots_csv_path, index=False)
+        elif all_red_dots:
+            # Just save red dots if that's all we have
             red_dots_df = pd.DataFrame(all_red_dots)
             red_dots_csv_path = os.path.join(self.output_dir, "all_red_dots.csv")
             red_dots_df.to_csv(red_dots_csv_path, index=False)
@@ -877,23 +1113,48 @@ class NucleiCounter:
             red_dot_count = result['Red_Dot_Count']
             
             # Calculate ratio of red dots to blue nuclei
-            ratio = 0
+            red_ratio = 0
             if blue_nuclei_count > 0:
-                ratio = red_dot_count / blue_nuclei_count
+                red_ratio = red_dot_count / blue_nuclei_count
             
             # Calculate average size of red dots in microns
-            avg_dot_size = 0
+            avg_red_dot_size = 0
             if filename in self.stored_red_dots and len(self.stored_red_dots[filename]) > 0:
                 dots = self.stored_red_dots[filename]
-                avg_dot_size = sum(dot['area_microns'] for dot in dots) / len(dots)
+                avg_red_dot_size = sum(dot['area_microns'] for dot in dots) / len(dots)
             
-            excel_data.append({
+            # Create the base data for this file
+            file_data = {
                 'File Name': filename,
                 'Total Blue Nuclei': blue_nuclei_count,
                 'Total Red Dots': red_dot_count,
-                'Red Dots / Blue Nuclei Ratio': ratio,
-                'Avg Red Dot Size (μm²)': avg_dot_size
-            })
+                'Red Dots / Blue Nuclei Ratio': red_ratio,
+                'Avg Red Dot Size (μm²)': avg_red_dot_size
+            }
+            
+            # Add green dot data if applicable
+            if self.analyze_green_dots:
+                green_dot_count = result.get('Green_Dot_Count', 0)
+                
+                # Calculate ratio of green dots to blue nuclei
+                green_ratio = 0
+                if blue_nuclei_count > 0:
+                    green_ratio = green_dot_count / blue_nuclei_count
+                
+                # Calculate average size of green dots in microns
+                avg_green_dot_size = 0
+                if filename in self.stored_green_dots and len(self.stored_green_dots[filename]) > 0:
+                    dots = self.stored_green_dots[filename]
+                    avg_green_dot_size = sum(dot['area_microns'] for dot in dots) / len(dots)
+                
+                # Add green dot columns
+                file_data.update({
+                    'Total Green Dots': green_dot_count,
+                    'Green Dots / Blue Nuclei Ratio': green_ratio,
+                    'Avg Green Dot Size (μm²)': avg_green_dot_size
+                })
+            
+            excel_data.append(file_data)
         
         # Create Excel file
         if excel_data:
@@ -931,15 +1192,27 @@ class NucleiCounter:
         total_red_dots = results_df['Red_Dot_Count'].sum()
         avg_red_dots = results_df['Red_Dot_Count'].mean()
         
-        # Calculate overall average dot size
-        overall_avg_dot_size = 0
+        # Green dot statistics if applicable
+        total_green_dots = 0
+        avg_green_dots = 0
+        if self.analyze_green_dots and 'Green_Dot_Count' in results_df.columns:
+            total_green_dots = results_df['Green_Dot_Count'].sum()
+            avg_green_dots = results_df['Green_Dot_Count'].mean()
+        
+        # Calculate average dot sizes
+        overall_avg_red_dot_size = 0
+        overall_avg_green_dot_size = 0
+        
         if all_red_dots:
-            all_dots_df = pd.DataFrame(all_red_dots)
-            overall_avg_dot_size = all_dots_df['Area_Microns'].mean()
+            red_dots_df = pd.DataFrame(all_red_dots)
+            overall_avg_red_dot_size = red_dots_df['Area_Microns'].mean()
+            
+        if self.analyze_green_dots and all_green_dots:
+            green_dots_df = pd.DataFrame(all_green_dots)
+            overall_avg_green_dot_size = green_dots_df['Area_Microns'].mean()
 
-        # Show completion message
-        messagebox.showinfo(
-            "Processing Complete",
+        # Prepare completion message
+        message = (
             f"All images have been processed.\n\n"
             f"Total nuclei detected: {total_count}\n"
             f"- Automatically detected: {auto_count}\n"
@@ -947,10 +1220,20 @@ class NucleiCounter:
             f"Average nuclei per image: {avg_count:.2f}\n\n"
             f"Total red dots detected: {total_red_dots}\n"
             f"Average red dots per image: {avg_red_dots:.2f}\n"
-            f"Average red dot size: {overall_avg_dot_size:.2f} μm²\n\n"
-            f"Results saved to {self.output_dir}\n"
-            f"Excel report: staining_analysis_report.xlsx"
+            f"Average red dot size: {overall_avg_red_dot_size:.2f} μm²\n"
         )
+        
+        if self.analyze_green_dots:
+            message += (
+                f"\nTotal green dots detected: {total_green_dots}\n"
+                f"Average green dots per image: {avg_green_dots:.2f}\n"
+                f"Average green dot size: {overall_avg_green_dot_size:.2f} μm²\n"
+            )
+            
+        message += f"\nResults saved to {self.output_dir}\nExcel report: staining_analysis_report.xlsx"
+
+        # Show completion message
+        messagebox.showinfo("Processing Complete", message)
 
 
 # Run the application
