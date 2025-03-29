@@ -24,7 +24,7 @@ class NucleiCounter:
         self.root.withdraw()  # Hide the main window
 
         # Default parameters - updated based on user feedback
-        self.params = {
+        self.default_params = {
             'blue_threshold': 65,  # Threshold for blue channel
             'min_size': 153,  # Minimum nucleus size in pixels
             'max_size': 10000,  # Maximum nucleus size in pixels
@@ -32,6 +32,12 @@ class NucleiCounter:
             'closing_size': 4,  # Size of closing kernel
             'distance_threshold': 15  # Distance threshold for connecting fragments
         }
+
+        # Current parameters (will be image-specific)
+        self.params = self.default_params.copy()
+
+        # Store image-specific parameters
+        self.image_params = {}
 
         # UI elements
         self.preview_fig = None
@@ -42,6 +48,7 @@ class NucleiCounter:
         self.navigation_window = None
         self.sliders = {}
         self.selected_image = None
+        self.param_modified = False  # Flag to track if parameters were modified for current image
 
         # Data
         self.current_image = None
@@ -441,6 +448,19 @@ class NucleiCounter:
             else:
                 self.manual_nuclei = []
 
+            # Load image-specific parameters if they exist
+            if filename in self.image_params:
+                self.params = self.image_params[filename].copy()
+                self.param_modified = True
+            else:
+                self.params = self.default_params.copy()
+                self.param_modified = False
+
+            # Update sliders if they exist
+            if hasattr(self, 'sliders') and self.sliders:
+                for param, (slider_var, value_label, _) in self.sliders.items():
+                    slider_var.set(self.params[param])
+
             return True
         return False
 
@@ -462,7 +482,8 @@ class NucleiCounter:
             'Filename': self.current_filename,
             'Auto_Nuclei_Count': count - len(self.manual_nuclei),
             'Manual_Nuclei_Count': len(self.manual_nuclei),
-            'Total_Nuclei_Count': count
+            'Total_Nuclei_Count': count,
+            'Has_Custom_Params': self.current_filename in self.image_params
         }
 
         # Update or add to total results
@@ -476,6 +497,10 @@ class NucleiCounter:
         # Update stored manual nuclei
         if self.manual_nuclei:
             self.stored_manual_nuclei[self.current_filename] = self.manual_nuclei.copy()
+
+        # Save custom parameters if modified
+        if self.param_modified:
+            self.image_params[self.current_filename] = self.params.copy()
 
         print(f"Saved results for {self.current_filename}: {count} nuclei detected")
         return True
