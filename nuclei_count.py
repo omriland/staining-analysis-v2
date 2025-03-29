@@ -21,9 +21,9 @@ matplotlib.use('TkAgg')
 class NucleiCounter:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.withdraw()  # Hide the main window
+        self.root.title("DAPI Nuclei Counter")
 
-        # Default parameters - updated based on user feedback
+        # Default parameters
         self.default_params = {
             'blue_threshold': 65,  # Threshold for blue channel
             'min_size': 153,  # Minimum nucleus size in pixels
@@ -44,10 +44,8 @@ class NucleiCounter:
         self.preview_axs = None
         self.binary_img = None
         self.result_img = None
-        self.param_window = None
-        self.navigation_window = None
+        self.param_frame = None
         self.sliders = {}
-        self.selected_image = None
         self.param_modified = False  # Flag to track if parameters were modified for current image
 
         # Data
@@ -55,21 +53,101 @@ class NucleiCounter:
         self.current_filename = None
         self.output_dir = None
         self.total_results = []
-        self.process_all = False
         self.current_file_index = 0
         self.input_dir = None
-        self.tiff_files = None
+        self.tiff_files = []
 
         # User-added nuclei storage
         self.manual_nuclei = []
         self.stored_manual_nuclei = {}
 
-    def select_input_folder(self):
-        """Let user select a folder containing TIFF images"""
+        # Create main GUI
+        self.create_main_gui()
+
+        # Run the main loop
+        self.root.mainloop()
+
+    def create_main_gui(self):
+        """Create the main GUI with all necessary frames"""
+        # Set window size
+        self.root.geometry("1200x800")  # Increase window size
+
+        # Create main frames
+        self.main_frame = ttk.Frame(self.root, padding=10)
+        self.main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Create header with file selection
+        header_frame = ttk.Frame(self.main_frame, padding=5)
+        header_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(header_frame, text="DAPI-Stained Nuclei Counter", font=("Arial", 16, "bold")).pack(side=tk.LEFT,
+                                                                                                     padx=5)
+
+        select_btn = ttk.Button(header_frame, text="Select Folder with TIFF Images",
+                                command=self.select_and_load_folder)
+        select_btn.pack(side=tk.RIGHT, padx=5)
+
+        # Create main content frame
+        content_frame = ttk.Frame(self.main_frame)
+        content_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+
+        # Left frame for parameters - set fixed width
+        self.param_frame = ttk.LabelFrame(content_frame, text="Parameters", padding=10, width=350)
+        self.param_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+        self.param_frame.pack_propagate(False)  # Prevent frame from shrinking
+
+        # Right frame for previews and navigation - ensure it takes the remaining space
+        preview_frame = ttk.LabelFrame(content_frame, text="Preview & Navigation", padding=10)
+        preview_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # Create navigation header
+        nav_frame = ttk.Frame(preview_frame)
+        nav_frame.pack(fill=tk.X, pady=5)
+
+        # Current image indicator
+        self.status_label = ttk.Label(nav_frame, text="No images loaded")
+        self.status_label.pack(side=tk.LEFT, pady=5)
+
+        # Nuclei count indicator
+        self.count_label = ttk.Label(nav_frame, text="Nuclei count: 0", font=("Arial", 12, "bold"))
+        self.count_label.pack(side=tk.RIGHT, pady=5)
+
+        # Canvas for matplotlib
+        self.canvas_frame = ttk.Frame(preview_frame)
+        self.canvas_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Navigation buttons - Use fixed width buttons
+        buttons_frame = ttk.Frame(preview_frame)
+        buttons_frame.pack(fill=tk.X, pady=10)
+
+        # Use grid layout for buttons to ensure they're all visible
+        buttons_frame.columnconfigure(0, weight=1)
+        buttons_frame.columnconfigure(1, weight=1)
+        buttons_frame.columnconfigure(2, weight=1)
+        buttons_frame.columnconfigure(3, weight=1)
+
+        self.prev_btn = ttk.Button(buttons_frame, text="← Previous", command=self.move_to_prev_image, state=tk.DISABLED,
+                                   width=15)
+        self.prev_btn.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+
+        self.save_btn = ttk.Button(buttons_frame, text="Save Current", command=self.save_current_image,
+                                   state=tk.DISABLED, width=15)
+        self.save_btn.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+
+        self.next_btn = ttk.Button(buttons_frame, text="Save & Next →", command=self.move_to_next_image,
+                                   state=tk.DISABLED, width=15)
+        self.next_btn.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
+
+        self.process_all_btn = ttk.Button(buttons_frame, text="Process All Remaining", command=self.process_remaining,
+                                          state=tk.DISABLED, width=15)
+        self.process_all_btn.grid(row=0, column=3, padx=5, pady=5, sticky="ew")
+
+    def select_and_load_folder(self):
+        """Select a folder and load the first image"""
         input_dir = filedialog.askdirectory(title="Select folder with TIFF images")
         if not input_dir:
-            print("No folder selected. Exiting.")
-            sys.exit()
+            print("No folder selected.")
+            return
 
         # Create output directory
         self.output_dir = os.path.join(input_dir, "nuclei_results")
@@ -78,24 +156,56 @@ class NucleiCounter:
         # Get list of TIFF files
         tiff_files = [f for f in os.listdir(input_dir) if f.lower().endswith(('.tif', '.tiff'))]
         if not tiff_files:
-            print(f"No TIFF files found in {input_dir}. Exiting.")
-            sys.exit()
+            messagebox.showerror("Error", f"No TIFF files found in {input_dir}.")
+            return
 
-        return input_dir, tiff_files
+        print(f"Found {len(tiff_files)} TIFF files in {input_dir}")
 
-    def adjust_parameters(self):
-        """GUI for adjusting parameters with live preview updates"""
-        param_window = tk.Toplevel(self.root)
-        param_window.title("Adjust Parameters")
-        param_window.geometry("400x400")
+        self.input_dir = input_dir
+        self.tiff_files = tiff_files
+        self.current_file_index = 0
 
-        # Create a frame for parameters
-        frame = ttk.Frame(param_window, padding="10")
-        frame.pack(fill=tk.BOTH, expand=True)
+        # Load first image
+        success = self.load_current_image()
 
-        # Add sliders for each parameter
-        row = 0
-        sliders = {}
+        if success:
+            print(f"Loaded first image: {self.current_filename}")
+            # Enable buttons
+            self.save_btn.config(state=tk.NORMAL)
+            self.next_btn.config(state=tk.NORMAL)
+            self.process_all_btn.config(state=tk.NORMAL)
+
+            # Create parameter sliders
+            self.create_parameter_sliders()
+        else:
+            messagebox.showerror("Error", "Failed to load the first image.")
+            print("Failed to load the first image.")
+
+    def create_parameter_sliders(self):
+        """Create sliders for each parameter"""
+        # Clear existing widgets in the parameter frame, except info_frame and param_status
+        for widget in self.param_frame.winfo_children():
+            if widget != self.param_status:  # Keep param_status
+                widget.destroy()
+
+        # Add explanatory text
+        info_frame = ttk.Frame(self.param_frame, borderwidth=2, relief="groove", padding=10)
+        info_frame.pack(fill=tk.X, pady=10)
+
+        ttk.Label(info_frame, text="Image-Specific Parameters", font=("Arial", 12, "bold"), foreground="blue").pack(
+            anchor="w")
+
+        ttk.Label(
+            info_frame,
+            text="• Parameters you adjust will ONLY affect the current image\n"
+                 "• Each image maintains its own settings\n"
+                 "• Use 'Apply to All Images' to make current settings the new defaults",
+            font=("Arial", 10),
+            justify="left"
+        ).pack(anchor="w", pady=5)
+
+        # Re-pack the param_status for current image
+        self.param_status.pack(anchor="w", pady=5)
 
         # Parameter ranges and step sizes
         param_configs = {
@@ -107,134 +217,339 @@ class NucleiCounter:
             'distance_threshold': (1, 30, 1)
         }
 
-        # First, load image and initialize preview figure
-        if self.current_image is None:
-            print("No image loaded for preview")
-            return
+        # Create frame for sliders
+        sliders_frame = ttk.Frame(self.param_frame)
+        sliders_frame.pack(fill=tk.BOTH, expand=True, pady=10)
 
-        # Initialize the preview figure
-        if self.preview_fig is None:
-            self.preview_fig, axs = plt.subplots(2, 2, figsize=(12, 10))
-            self.preview_fig.canvas.manager.set_window_title("Live Preview")
-            self.preview_axs = axs.ravel()
+        self.sliders = {}
+        row = 0
 
-            # Display original image with correct colors (static)
-            if len(self.current_image[0].shape) == 3:
-                # Handle the image based on how it was loaded
-                self.preview_axs[0].imshow(self.current_image[0])
-            else:
-                self.preview_axs[0].imshow(self.current_image[0], cmap='gray')
-            self.preview_axs[0].set_title("Original Image")
-
-            # Display blue channel (static)
-            self.preview_axs[1].imshow(self.current_image[1], cmap='Blues')
-            self.preview_axs[1].set_title("Blue Channel (DAPI)")
-
-            # Initialize placeholders for dynamic images
-            self.binary_img = self.preview_axs[2].imshow(np.zeros_like(self.current_image[1]), cmap='gray')
-            self.preview_axs[2].set_title("Binary (Thresholded) Image")
-
-            self.result_img = self.preview_axs[3].imshow(self.current_image[0])
-            self.preview_axs[3].set_title("Detection Result")
-
-            # Add click event for adding missed nuclei
-            self.preview_fig.canvas.mpl_connect('button_press_event', self._on_click)
-
-            # Add text about manual marking feature
-            self.preview_fig.text(0.5, 0.01,
-                                  "Click on missed nuclei in the Detection Result to mark them manually",
-                                  ha='center', fontsize=10, bbox=dict(facecolor='white', alpha=0.7))
-
-            # Calculate current count for the title
-            _, _, _, count = self.process_image(self.current_image[0], self.current_image[1])
-            self.preview_fig.suptitle(
-                f"Preview: {self.current_filename} - {count} nuclei detected\n"
-                f"(Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)})",
-                fontsize=14
-            )
-
-            plt.tight_layout()
-            self.preview_fig.subplots_adjust(top=0.85, bottom=0.08)
-            plt.ion()  # Turn on interactive mode
-            plt.show()
-
-        # Create sliders with live update functionality
+        # Create sliders
         for param, value in self.params.items():
-            label = ttk.Label(frame, text=param.replace('_', ' ').title())
+            label = ttk.Label(sliders_frame, text=param.replace('_', ' ').title())
             label.grid(row=row, column=0, sticky=tk.W, pady=5)
 
             min_val, max_val, step = param_configs[param]
 
             var = tk.IntVar(value=value)
             slider = ttk.Scale(
-                frame, from_=min_val, to=max_val,
-                variable=var, orient=tk.HORIZONTAL,
-                length=200, command=lambda v, p=param, var=var: self._update_param_live(p, int(float(var.get())))
+                sliders_frame,
+                from_=min_val,
+                to=max_val,
+                variable=var,
+                orient=tk.HORIZONTAL,
+                length=200,
+                command=lambda v, p=param, var=var: self.update_param(p, int(float(var.get())))
             )
             slider.grid(row=row, column=1, padx=5, pady=5)
 
-            value_label = ttk.Label(frame, text=str(value))
+            value_label = ttk.Label(sliders_frame, text=str(value))
             value_label.grid(row=row, column=2, padx=5)
 
-            sliders[param] = (var, value_label)
+            # Add reset to default button for each parameter
+            reset_btn = ttk.Button(
+                sliders_frame,
+                text="Reset",
+                width=6,
+                command=lambda p=param: self.reset_param_to_default(p)
+            )
+            reset_btn.grid(row=row, column=3, padx=5, pady=5)
+
+            self.sliders[param] = (var, value_label, reset_btn)
             row += 1
 
             # Set initial value and trace changes
             var.trace_add("write", lambda *args, p=param, v=var, l=value_label:
             l.config(text=str(int(float(v.get())))))
 
+        # Parameter action buttons
+        actions_frame = ttk.Frame(self.param_frame)
+        actions_frame.pack(fill=tk.X, pady=10)
+
+        # Button to reset all parameters to default
+        reset_all_btn = ttk.Button(
+            actions_frame,
+            text="Reset All to Default",
+            command=self.reset_all_params
+        )
+        reset_all_btn.pack(side=tk.LEFT, padx=5)
+
+        # Button to apply current parameters to all images
+        apply_all_btn = ttk.Button(
+            actions_frame,
+            text="Apply to All Images",
+            command=self.apply_params_to_all
+        )
+        apply_all_btn.pack(side=tk.LEFT, padx=5)
+
         # Add a button to clear manual nuclei
-        clear_manual_btn = ttk.Button(frame, text="Clear Manual Markers", command=self._clear_manual_nuclei)
-        clear_manual_btn.grid(row=row, column=0, columnspan=3, pady=10)
-        row += 1
+        clear_manual_btn = ttk.Button(self.param_frame, text="Clear Manual Markers", command=self.clear_manual_nuclei)
+        clear_manual_btn.pack(fill=tk.X, pady=10)
 
-        # Update preview initially
-        self._update_preview()
+    def update_param(self, param, value):
+        """Update parameter value and refresh preview"""
+        # Save previous value to check if changed
+        prev_value = self.params[param]
 
-        # Keep reference to widgets
-        self.param_window = param_window
-        self.sliders = sliders
-
-        return param_window
-
-    def _on_click(self, event):
-        """Handle click events to add missed nuclei"""
-        # Only accept clicks on the detection result panel (index 3)
-        if event.inaxes == self.preview_axs[3]:
-            x, y = int(event.xdata), int(event.ydata)
-
-            # Check if within image bounds
-            if 0 <= x < self.current_image[0].shape[1] and 0 <= y < self.current_image[0].shape[0]:
-                # Add to manual nuclei list
-                self.manual_nuclei.append((x, y))
-                print(f"Manual nucleus added at ({x}, {y})")
-
-                # Update preview
-                self._update_preview()
-
-                # Update navigation status to show updated count
-                if hasattr(self, 'count_label'):
-                    _, _, _, count = self.process_image(self.current_image[0], self.current_image[1])
-                    count_text = f"Nuclei count: {count} (Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)})"
-                    self.count_label.config(text=count_text)
-
-    def _clear_manual_nuclei(self):
-        """Clear all manually added nuclei markers"""
-        self.manual_nuclei = []
-        self._update_preview()
-
-        # Update navigation status to show updated count
-        if hasattr(self, 'count_label'):
-            _, _, _, count = self.process_image(self.current_image[0], self.current_image[1])
-            count_text = f"Nuclei count: {count} (Auto: {count}, Manual: 0)"
-            self.count_label.config(text=count_text)
-
-    def _update_param_live(self, param, value):
-        """Update parameter value and refresh preview in real-time"""
+        # Update parameter
         self.params[param] = value
-        self._update_preview()
 
-    def _update_preview(self):
+        # Mark as modified if changed from default
+        if value != self.default_params[param]:
+            self.param_modified = True
+            # Store image-specific parameters
+            self.image_params[self.current_filename] = self.params.copy()
+
+            # Update status text
+            if hasattr(self, 'param_status'):
+                self.param_status.config(text="* This image has custom parameters *")
+        elif prev_value != value:
+            # Check if all parameters now match defaults
+            all_default = all(self.params[p] == self.default_params[p] for p in self.params)
+            if all_default:
+                # If using all defaults, remove from image_params if present
+                if self.current_filename in self.image_params:
+                    del self.image_params[self.current_filename]
+                self.param_modified = False
+
+                # Update status text
+                if hasattr(self, 'param_status'):
+                    self.param_status.config(text="Using default parameters")
+
+        # Update preview
+        self.update_preview()
+
+    def reset_param_to_default(self, param):
+        """Reset a specific parameter to its default value"""
+        default_value = self.default_params[param]
+
+        # Update slider
+        slider_var, _, _ = self.sliders[param]
+        slider_var.set(default_value)
+
+        # This will trigger update_param through the trace
+
+    def reset_all_params(self):
+        """Reset all parameters to default values"""
+        for param, (slider_var, _, _) in self.sliders.items():
+            slider_var.set(self.default_params[param])
+
+        # Update status
+        if self.current_filename in self.image_params:
+            del self.image_params[self.current_filename]
+
+        self.param_modified = False
+        self.param_status.config(text="Using default parameters")
+
+    def apply_params_to_all(self):
+        """Apply current parameters to all images"""
+        # Ask for confirmation
+        confirm = messagebox.askyesno(
+            "Apply to All Images",
+            "Are you sure you want to apply the current parameters to ALL images?\n"
+            "This will override any custom settings for individual images."
+        )
+
+        if confirm:
+            # Update default parameters
+            self.default_params = self.params.copy()
+
+            # Clear all image-specific parameters
+            self.image_params = {}
+
+            # Update status
+            self.param_modified = False
+            self.param_status.config(text="Using default parameters (applied to all)")
+
+            messagebox.showinfo(
+                "Parameters Applied",
+                "Current parameters have been set as the new default for all images."
+            )
+
+    def load_current_image(self):
+        """Load the current image based on index"""
+        if not self.tiff_files or self.current_file_index >= len(self.tiff_files):
+            print("No files to load or index out of range")
+            return False
+
+        filename = self.tiff_files[self.current_file_index]
+        image_path = os.path.join(self.input_dir, filename)
+        print(f"Attempting to load image: {image_path}")
+
+        # Store current manual nuclei before changing images
+        if self.current_filename and self.manual_nuclei:
+            self.stored_manual_nuclei[self.current_filename] = self.manual_nuclei.copy()
+
+        # Load new image
+        self.current_filename = filename
+        try:
+            # Read the image using scikit-image (loads in RGB format)
+            image = io.imread(image_path)
+            print(f"Image loaded successfully. Shape: {image.shape}")
+
+            # Handle different image formats
+            if len(image.shape) == 2:  # Grayscale
+                print("Detected grayscale image")
+                blue_channel = image
+            elif len(image.shape) == 3:  # RGB or RGBA
+                print(f"Detected color image with {image.shape[2]} channels")
+                if image.shape[2] >= 3:  # At least 3 channels (RGB)
+                    blue_channel = image[:, :, 2]  # blue channel is index 2 in RGB
+                    print("Extracted blue channel (index 2)")
+                else:
+                    raise ValueError(f"Unexpected number of channels: {image.shape[2]}")
+            else:
+                raise ValueError(f"Unexpected image shape: {image.shape}")
+
+            self.current_image = (image, blue_channel)
+
+            # Debug information about loaded image
+            print(f"Current image dimensions: {image.shape}")
+            print(f"Blue channel dimensions: {blue_channel.shape}")
+            print(f"Blue channel min/max: {blue_channel.min()}/{blue_channel.max()}")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load image {filename}: {e}")
+            print(f"Error loading image: {str(e)}")
+            return False
+
+        # Retrieve any stored manual nuclei for this image
+        if filename in self.stored_manual_nuclei:
+            self.manual_nuclei = self.stored_manual_nuclei[filename].copy()
+        else:
+            self.manual_nuclei = []
+
+        # Load image-specific parameters if they exist
+        if filename in self.image_params:
+            self.params = self.image_params[filename].copy()
+            self.param_modified = True
+            self.param_status.config(text="* This image has custom parameters *")
+        else:
+            self.params = self.default_params.copy()
+            self.param_modified = False
+            self.param_status.config(text="Using default parameters")
+
+        # Update sliders if they exist
+        if hasattr(self, 'sliders') and self.sliders:
+            for param, (slider_var, value_label, _) in self.sliders.items():
+                slider_var.set(self.params[param])
+
+        # Update navigation status
+        current_idx = self.current_file_index + 1
+        self.status_label.config(text=f"Image {current_idx} of {len(self.tiff_files)}: {filename}")
+
+        # Update preview
+        self.initialize_preview()
+
+        # Update navigation buttons
+        self.prev_btn.config(state=tk.NORMAL if self.current_file_index > 0 else tk.DISABLED)
+        self.next_btn.config(state=tk.NORMAL if self.current_file_index < len(self.tiff_files) - 1 else tk.DISABLED)
+
+        return True
+
+    def initialize_preview(self):
+        """Initialize or update the preview matplotlib figure"""
+        if self.current_image is None:
+            return
+
+        # Process the image
+        binary, nuclei_mask, result_img, count = self.process_image(
+            self.current_image[0], self.current_image[1])
+
+        # Update count label
+        count_text = f"Nuclei count: {count} (Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)})"
+        self.count_label.config(text=count_text)
+
+        # Create or update matplotlib figure
+        if self.preview_fig is None:
+            # Create new figure
+            self.preview_fig = plt.figure(figsize=(10, 8))
+
+            # Create subplots
+            gs = self.preview_fig.add_gridspec(2, 2)
+            self.preview_axs = [
+                self.preview_fig.add_subplot(gs[0, 0]),  # Original
+                self.preview_fig.add_subplot(gs[0, 1]),  # Blue channel
+                self.preview_fig.add_subplot(gs[1, 0]),  # Binary
+                self.preview_fig.add_subplot(gs[1, 1])  # Result
+            ]
+
+            # Embed in tkinter
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+            self.canvas = FigureCanvasTkAgg(self.preview_fig, master=self.canvas_frame)
+            self.canvas.draw()
+            self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+            # Add click event for adding missed nuclei
+            self.canvas.mpl_connect('button_press_event', self.on_preview_click)
+
+            # Add toolbar
+            from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
+            toolbar_frame = ttk.Frame(self.canvas_frame)
+            toolbar_frame.pack(fill=tk.X)
+            toolbar = NavigationToolbar2Tk(self.canvas, toolbar_frame)
+            toolbar.update()
+
+        # Update the figure
+        self.update_preview_figure(binary, nuclei_mask, result_img, count)
+
+    def update_preview_figure(self, binary, nuclei_mask, result_img, count):
+        """Update the preview figure with the current image and processing results"""
+        if self.preview_fig is None or self.preview_axs is None:
+            return
+
+        # Clear all axes
+        for ax in self.preview_axs:
+            ax.clear()
+
+        # Set tight layout to False to prevent automatic adjustment
+        self.preview_fig.set_tight_layout(False)
+
+        # Original image
+        if len(self.current_image[0].shape) == 3:
+            self.preview_axs[0].imshow(self.current_image[0])
+        else:
+            self.preview_axs[0].imshow(self.current_image[0], cmap='gray')
+        self.preview_axs[0].set_title("Original Image")
+
+        # Blue channel
+        self.preview_axs[1].imshow(self.current_image[1], cmap='Blues')
+        self.preview_axs[1].set_title("Blue Channel (DAPI)")
+
+        # Binary image
+        self.preview_axs[2].imshow(binary, cmap='gray')
+        self.preview_axs[2].set_title("Binary (Thresholded) Image")
+
+        # Result image
+        if len(result_img.shape) == 3:
+            # Handle color conversion if needed
+            if np.array_equal(result_img[:, :, 0], self.current_image[0][:, :, 2]) and \
+                    np.array_equal(result_img[:, :, 2], self.current_image[0][:, :, 0]):
+                result_img = cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB)
+            self.preview_axs[3].imshow(result_img)
+        else:
+            self.preview_axs[3].imshow(result_img, cmap='gray')
+        self.preview_axs[3].set_title("Detection Result")
+
+        # Add title with count information
+        title_text = f"Preview: {self.current_filename} - {count} nuclei detected\n(Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)})"
+        self.preview_fig.suptitle(title_text, fontsize=12)
+
+        # Add instruction about manual marking
+        self.preview_fig.text(0.5, 0.01,
+                              "Click on missed nuclei in the Detection Result panel to mark them manually",
+                              ha='center', fontsize=9, bbox=dict(facecolor='white', alpha=0.7))
+
+        # Use fixed spacing instead of tight_layout
+        self.preview_fig.subplots_adjust(
+            left=0.05, right=0.95, bottom=0.1, top=0.9,
+            wspace=0.2, hspace=0.3
+        )
+
+        # Draw the updated figure
+        self.canvas.draw()
+
+    def update_preview(self):
         """Update the preview with current parameters"""
         if self.current_image is None:
             return
@@ -244,85 +559,30 @@ class NucleiCounter:
             self.current_image[0], self.current_image[1])
 
         # Update the preview figure
-        if self.preview_fig:
-            # Update binary image
-            self.binary_img.set_data(binary)
+        self.update_preview_figure(binary, nuclei_mask, result_img, count)
 
-            # Update result image with correct color display
-            if len(result_img.shape) == 3:
-                # If using OpenCV to create result image, convert BGR to RGB for display
-                if np.array_equal(result_img[:, :, 0], self.current_image[0][:, :, 2]) and \
-                        np.array_equal(result_img[:, :, 2], self.current_image[0][:, :, 0]):
-                    # This indicates BGR order needs conversion
-                    self.result_img.set_data(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB))
-                else:
-                    # Image is already in correct color order
-                    self.result_img.set_data(result_img)
-            else:
-                self.result_img.set_data(result_img)
+        # Update count label
+        count_text = f"Nuclei count: {count} (Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)})"
+        self.count_label.config(text=count_text)
 
-            # Update title with count information
-            self.preview_fig.suptitle(
-                f"Preview: {self.current_filename} - {count} nuclei detected\n"
-                f"(Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)})",
-                fontsize=14
-            )
+    def on_preview_click(self, event):
+        """Handle click events to add missed nuclei"""
+        if event.inaxes == self.preview_axs[3]:  # Click on result panel
+            x, y = int(event.xdata), int(event.ydata)
 
-            # Refresh the canvas
-            self.preview_fig.canvas.draw_idle()
-            self.preview_fig.canvas.flush_events()
+            # Check if within image bounds
+            if 0 <= x < self.current_image[0].shape[1] and 0 <= y < self.current_image[0].shape[0]:
+                # Add to manual nuclei list
+                self.manual_nuclei.append((x, y))
+                print(f"Manual nucleus added at ({x}, {y})")
 
-            # Update navigation status if available
-            if hasattr(self, 'count_label'):
-                count_text = f"Nuclei count: {count} (Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)})"
-                self.count_label.config(text=count_text)
+                # Update preview
+                self.update_preview()
 
-    def show_preview(self):
-        """This method is kept for backward compatibility but is now handled automatically
-        by the live preview functionality"""
-        self._update_preview()
-
-    def _on_process_all(self):
-        """Close parameter window and signal to process all files"""
-        # Store the manually marked nuclei for each image if any
-        if self.current_filename and self.manual_nuclei:
-            self.stored_manual_nuclei[self.current_filename] = self.manual_nuclei.copy()
-        else:
-            self.stored_manual_nuclei = {}
-
-        self.param_window.destroy()
-        if hasattr(self, 'navigation_window') and self.navigation_window:
-            self.navigation_window.destroy()
-        if self.preview_fig:
-            plt.close(self.preview_fig)
-        self.process_all = True
-
-    def load_image(self, image_path):
-        """Load an image and extract the blue channel"""
-        try:
-            # Read the image using scikit-image (loads in RGB format)
-            image = io.imread(image_path)
-
-            # Handle grayscale images
-            if len(image.shape) == 2:
-                return image, image
-
-            # For color images, extract blue channel
-            if len(image.shape) == 3:
-                if image.shape[2] == 3:  # RGB
-                    # In RGB order, blue is channel 2 (index 2)
-                    blue_channel = image[:, :, 2]
-                    return image, blue_channel
-                elif image.shape[2] == 4:  # RGBA
-                    blue_channel = image[:, :, 2]
-                    return image, blue_channel
-
-            print(f"Unexpected image format: {image.shape}")
-            return None, None
-
-        except Exception as e:
-            print(f"Error loading image {image_path}: {e}")
-            return None, None
+    def clear_manual_nuclei(self):
+        """Clear all manually added nuclei markers"""
+        self.manual_nuclei = []
+        self.update_preview()
 
     def process_image(self, image, blue_channel):
         """Process image to detect nuclei"""
@@ -384,88 +644,8 @@ class NucleiCounter:
 
         return binary, nuclei_mask, result_img, len(contours) + len(self.manual_nuclei)
 
-    def process_files(self, input_dir, tiff_files):
-        """Process files one by one with manual review"""
-        self.process_all = False
-        self.stored_manual_nuclei = {}
-        self.input_dir = input_dir
-        self.tiff_files = tiff_files
-        self.current_file_index = 0
-
-        # Load the first image for preview
-        self._load_current_image()
-
-        # Show parameter adjustment window with navigation
-        self.setup_navigation_window(input_dir, tiff_files)
-        param_window = self.adjust_parameters()
-        self.root.wait_window(param_window)
-
-        # Close preview figure if still open
-        if self.preview_fig:
-            plt.close(self.preview_fig)
-            self.preview_fig = None
-
-        # Process all remaining files if requested
-        if self.process_all:
-            self._process_remaining_files()
-
-        # Save results to CSV
-        if self.total_results:
-            results_df = pd.DataFrame(self.total_results)
-            csv_path = os.path.join(self.output_dir, "nuclei_counts.csv")
-            results_df.to_csv(csv_path, index=False)
-
-            print(f"Processing complete. Results saved to {self.output_dir}")
-            print(f"CSV results saved to {csv_path}")
-
-            # Show summary statistics
-            total_count = results_df['Total_Nuclei_Count'].sum()
-            auto_count = results_df['Auto_Nuclei_Count'].sum()
-            manual_count = results_df['Manual_Nuclei_Count'].sum()
-            avg_count = results_df['Total_Nuclei_Count'].mean()
-            print(f"Total nuclei detected: {total_count}")
-            print(f"  - Automatically detected: {auto_count}")
-            print(f"  - Manually added: {manual_count}")
-            print(f"Average nuclei per image: {avg_count:.2f}")
-
-    def _load_current_image(self):
-        """Load the current image based on index"""
-        if self.current_file_index < len(self.tiff_files):
-            filename = self.tiff_files[self.current_file_index]
-            image_path = os.path.join(self.input_dir, filename)
-
-            # Store current manual nuclei before changing images
-            if self.current_filename and self.manual_nuclei:
-                self.stored_manual_nuclei[self.current_filename] = self.manual_nuclei.copy()
-
-            # Load new image
-            self.current_filename = filename
-            self.current_image = self.load_image(image_path)
-
-            # Retrieve any stored manual nuclei for this image
-            if filename in self.stored_manual_nuclei:
-                self.manual_nuclei = self.stored_manual_nuclei[filename].copy()
-            else:
-                self.manual_nuclei = []
-
-            # Load image-specific parameters if they exist
-            if filename in self.image_params:
-                self.params = self.image_params[filename].copy()
-                self.param_modified = True
-            else:
-                self.params = self.default_params.copy()
-                self.param_modified = False
-
-            # Update sliders if they exist
-            if hasattr(self, 'sliders') and self.sliders:
-                for param, (slider_var, value_label, _) in self.sliders.items():
-                    slider_var.set(self.params[param])
-
-            return True
-        return False
-
-    def _save_current_image(self):
-        """Save results for the current image and return True if successful"""
+    def save_current_image(self):
+        """Save results for the current image"""
         if self.current_image is None or self.current_filename is None:
             return False
 
@@ -502,166 +682,83 @@ class NucleiCounter:
         if self.param_modified:
             self.image_params[self.current_filename] = self.params.copy()
 
-        print(f"Saved results for {self.current_filename}: {count} nuclei detected")
+        messagebox.showinfo("Saved", f"Results saved for {self.current_filename}: {count} nuclei detected")
         return True
 
-    def _move_to_next_image(self):
+    def move_to_next_image(self):
         """Save current image and move to the next one"""
-        # Save current image
-        if not self._save_current_image():
-            return False
-
-        # Move to next image
-        self.current_file_index += 1
-        if self._load_current_image():
-            # Update preview
-            self._update_image_display()
-            self._update_preview()
-            return True
-        else:
-            # No more images
-            self._finalize_processing()
-            return False
-
-    def _move_to_prev_image(self):
-        """Save current image and move to the previous one"""
-        # Save current image
-        if not self._save_current_image():
-            return False
-
-        # Move to previous image
-        if self.current_file_index > 0:
-            self.current_file_index -= 1
-            self._load_current_image()
-            # Update preview
-            self._update_image_display()
-            self._update_preview()
-            return True
+        if self.save_current_image():
+            # Move to next image
+            self.current_file_index += 1
+            if self.current_file_index < len(self.tiff_files):
+                self.load_current_image()
+                return True
+            else:
+                # No more images
+                self.finalize_processing()
+                return False
         return False
 
-    def _update_image_display(self):
-        """Update the image display when changing images"""
-        if self.preview_fig and self.current_image:
-            # Update static parts (original and blue channel)
-            self.preview_axs[0].clear()
-            if len(self.current_image[0].shape) == 3:
-                # Display with correct colors
-                self.preview_axs[0].imshow(self.current_image[0])
-            else:
-                self.preview_axs[0].imshow(self.current_image[0], cmap='gray')
-            self.preview_axs[0].set_title("Original Image")
+    def move_to_prev_image(self):
+        """Save current image and move to the previous one"""
+        if self.save_current_image():
+            # Move to previous image
+            if self.current_file_index > 0:
+                self.current_file_index -= 1
+                self.load_current_image()
+                return True
+        return False
 
-            self.preview_axs[1].clear()
-            self.preview_axs[1].imshow(self.current_image[1], cmap='Blues')
-            self.preview_axs[1].set_title("Blue Channel (DAPI)")
-
-            # Update dynamic parts
-            self._update_preview()
-
-            # Update navigation status
-            self._update_navigation_status()
-
-    def _finalize_processing(self):
-        """Handle completion of all images"""
-        print("All images have been processed.")
-        # If there's a UI, update it to show completion
-        if hasattr(self, 'navigation_window') and self.navigation_window:
-            messagebox.showinfo("Processing Complete",
-                                f"All {len(self.tiff_files)} images have been processed.")
-            self.navigation_window.destroy()
-
-        # Close parameter window if it exists
-        if hasattr(self, 'param_window') and self.param_window:
-            self.param_window.destroy()
-
-        # Close preview
-        if self.preview_fig:
-            plt.close(self.preview_fig)
-            self.preview_fig = None
-
-    def _process_remaining_files(self):
-        """Process all remaining files without further user interaction"""
-        start_index = self.current_file_index
-        for i in range(start_index, len(self.tiff_files)):
-            self.current_file_index = i
-            if self._load_current_image():
-                self._save_current_image()
-                print(f"Auto-processed {self.current_filename}")
-
-        print(f"Processed {len(self.tiff_files) - start_index} remaining files.")
-
-    def setup_navigation_window(self, input_dir, tiff_files):
-        """Create a window with navigation buttons for stepping through images"""
-        navigation_window = tk.Toplevel(self.root)
-        navigation_window.title("Image Navigation")
-        navigation_window.geometry("500x150")
-
-        frame = ttk.Frame(navigation_window, padding="10")
-        frame.pack(fill=tk.BOTH, expand=True)
-
-        # Current image indicator
-        status_text = f"Image 1 of {len(tiff_files)}: {self.current_filename}"
-        self.status_label = ttk.Label(frame, text=status_text)
-        self.status_label.grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=10)
-
-        # Nuclei count indicator
-        _, _, _, count = self.process_image(self.current_image[0], self.current_image[1])
-        self.count_label = ttk.Label(
-            frame,
-            text=f"Nuclei count: {count} (Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)})",
-            font=("Arial", 12, "bold")
-        )
-        self.count_label.grid(row=1, column=0, columnspan=4, sticky=tk.W, pady=5)
-
-        # Navigation buttons
-        prev_btn = ttk.Button(frame, text="← Previous", command=self._move_to_prev_image)
-        prev_btn.grid(row=2, column=0, padx=5, pady=10)
-
-        save_btn = ttk.Button(frame, text="Save Current", command=self._save_current_image)
-        save_btn.grid(row=2, column=1, padx=5, pady=10)
-
-        next_btn = ttk.Button(frame, text="Save & Next →", command=self._move_to_next_image)
-        next_btn.grid(row=2, column=2, padx=5, pady=10)
-
-        process_all_btn = ttk.Button(frame, text="Process All Remaining", command=self._on_process_remaining)
-        process_all_btn.grid(row=2, column=3, padx=5, pady=10)
-
-        self.navigation_window = navigation_window
-
-    def _update_navigation_status(self):
-        """Update the navigation status and count labels"""
-        if hasattr(self, 'status_label'):
-            status_text = f"Image {self.current_file_index + 1} of {len(self.tiff_files)}: {self.current_filename}"
-            self.status_label.config(text=status_text)
-
-        if hasattr(self, 'count_label'):
-            _, _, _, count = self.process_image(self.current_image[0], self.current_image[1])
-            count_text = f"Nuclei count: {count} (Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)})"
-            self.count_label.config(text=count_text)
-
-    def _on_process_remaining(self):
+    def process_remaining(self):
         """Process all remaining images without further user interaction"""
-        response = messagebox.askyesno("Process Remaining",
-                                       f"Process the remaining {len(self.tiff_files) - self.current_file_index} images with current settings?")
+        response = messagebox.askyesno(
+            "Process Remaining",
+            f"Process the remaining {len(self.tiff_files) - self.current_file_index} images with current settings?"
+        )
+
         if response:
-            self._process_remaining_files()
-            self._finalize_processing()
+            # Save current image
+            self.save_current_image()
 
-    def run(self):
-        """Main function to run the nuclei counter"""
-        print("=== DAPI-Stained Nuclei Counter ===")
+            # Process remaining images
+            start_index = self.current_file_index + 1
+            for i in range(start_index, len(self.tiff_files)):
+                self.current_file_index = i
+                if self.load_current_image():
+                    self.save_current_image()
+                    print(f"Auto-processed {self.current_filename}")
 
-        # Select input folder with TIFF files
-        input_dir, tiff_files = self.select_input_folder()
-        print(f"Selected folder: {input_dir}")
-        print(f"Found {len(tiff_files)} TIFF files")
+            self.finalize_processing()
 
-        # Process files
-        self.process_files(input_dir, tiff_files)
+    def finalize_processing(self):
+        """Finalize processing and save summary CSV"""
+        if not self.total_results:
+            messagebox.showinfo("No Results", "No images were processed.")
+            return
 
-        print("Program finished.")
+        # Save results to CSV
+        results_df = pd.DataFrame(self.total_results)
+        csv_path = os.path.join(self.output_dir, "nuclei_counts.csv")
+        results_df.to_csv(csv_path, index=False)
+
+        # Calculate summary statistics
+        total_count = results_df['Total_Nuclei_Count'].sum()
+        auto_count = results_df['Auto_Nuclei_Count'].sum()
+        manual_count = results_df['Manual_Nuclei_Count'].sum()
+        avg_count = results_df['Total_Nuclei_Count'].mean()
+
+        # Show completion message
+        messagebox.showinfo(
+            "Processing Complete",
+            f"All images have been processed.\n\n"
+            f"Total nuclei detected: {total_count}\n"
+            f"- Automatically detected: {auto_count}\n"
+            f"- Manually added: {manual_count}\n"
+            f"Average nuclei per image: {avg_count:.2f}\n\n"
+            f"Results saved to {self.output_dir}"
+        )
 
 
+# Run the application
 if __name__ == "__main__":
-    counter = NucleiCounter()
-    counter.run()
+    app = NucleiCounter()
