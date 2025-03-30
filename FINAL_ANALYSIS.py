@@ -843,6 +843,20 @@ class NucleiCounter:
             binary = cv2.dilate(binary, dilation_kernel, iterations=1)
             binary = cv2.erode(binary, dilation_kernel, iterations=1)
 
+        # Apply distance threshold to merge nearby objects
+        distance_threshold = self.params['distance_threshold']
+        if distance_threshold > 1:
+            # Create distance transform
+            dist_transform = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+            # Threshold the distance transform to get markers
+            _, dist_thresh = cv2.threshold(dist_transform, distance_threshold, 255, cv2.THRESH_BINARY)
+            dist_thresh = np.uint8(dist_thresh)
+            # Use these markers with watershed to merge nearby objects
+            markers = measure.label(dist_thresh)
+            binary = segmentation.watershed(-dist_transform, markers, mask=binary)
+            # Convert back to binary
+            binary = np.uint8(binary > 0) * 255
+
         # Label connected components
         labels = measure.label(binary)
         regions = measure.regionprops(labels)
