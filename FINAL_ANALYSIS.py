@@ -114,7 +114,7 @@ class NucleiCounter:
                 'distance_threshold': 15,  # Distance threshold for connecting fragments
                 'red_threshold': 100,  # Threshold for red channel
                 'red_min_size': 5,  # Minimum red dot size in pixels
-                'red_max_size': 500  # Maximum red dot size in pixels
+                'red_max_size': 200  # Maximum red dot size in pixels - adjusted to more central value
             }
             
             # Add green dot parameters if needed
@@ -123,7 +123,7 @@ class NucleiCounter:
                 self.default_params.update({
                     'green_threshold': 100,  # Threshold for green channel
                     'green_min_size': 5,  # Minimum green dot size in pixels
-                    'green_max_size': 500  # Maximum green dot size in pixels
+                    'green_max_size': 200  # Maximum green dot size in pixels - adjusted to more central value
                 })
             
             # Micron conversion factor
@@ -372,7 +372,7 @@ class NucleiCounter:
         param_configs = {
             'blue_threshold': (0, 255, 1),
             'min_size': (10, 500, 10),
-            'max_size': (500, 10000, 100),
+            'max_size': (500, 20000, 500),
             'dilation_size': (0, 20, 1),
             'closing_size': (0, 20, 1),
             'distance_threshold': (1, 30, 1),
@@ -389,6 +389,22 @@ class NucleiCounter:
                 'green_max_size': (1, 500, 10)
             })
 
+        # Parameter descriptions for tooltips
+        param_descriptions = {
+            'blue_threshold': "Pixel brightness threshold for detecting blue nuclei.\nHigher values detect fewer, brighter nuclei.",
+            'min_size': "Minimum size in pixels for a valid nucleus.\nIncrease to filter out small artifacts.",
+            'max_size': "Maximum size in pixels for a valid nucleus.\nIncrease to include larger cell clusters (up to 20000px).",
+            'dilation_size': "Size of dilation kernel to connect fragments.\nLarger values connect more fragments.",
+            'closing_size': "Size of closing kernel for morphological operations.\nHelps fill holes in detected regions.",
+            'distance_threshold': "Distance threshold for connecting nearby fragments.\nLarger values merge more regions.",
+            'red_threshold': "Pixel brightness threshold for detecting red dots.\nHigher values detect fewer, brighter dots.",
+            'red_min_size': "Minimum size in pixels for a valid red dot.\nIncrease to filter out small artifacts.",
+            'red_max_size': "Maximum size in pixels for a valid red dot.\nIncrease to include larger dots or clusters.",
+            'green_threshold': "Pixel brightness threshold for detecting green dots.\nHigher values detect fewer, brighter dots.",
+            'green_min_size': "Minimum size in pixels for a valid green dot.\nIncrease to filter out small artifacts.",
+            'green_max_size': "Maximum size in pixels for a valid green dot.\nIncrease to include larger dots or clusters."
+        }
+
         # Create frame for sliders
         sliders_frame = ttk.Frame(self.param_frame)
         sliders_frame.pack(fill=tk.BOTH, expand=True, pady=10)
@@ -400,6 +416,41 @@ class NucleiCounter:
         for param, value in self.params.items():
             label = ttk.Label(sliders_frame, text=param.replace('_', ' ').title())
             label.grid(row=row, column=0, sticky=tk.W, pady=5)
+            
+            # Add info icon next to label
+            info_icon = ttk.Label(sliders_frame, text="ⓘ", foreground="blue", cursor="hand2")
+            info_icon.grid(row=row, column=1, sticky=tk.W, padx=2)
+            
+            # Create tooltip for info icon
+            tooltip = None
+            
+            # Create binding for tooltip
+            def show_tooltip(event, description=param_descriptions[param], widget=info_icon):
+                x, y, _, _ = widget.bbox("insert")
+                x += widget.winfo_rootx() + 15
+                y += widget.winfo_rooty() + 10
+                
+                # Create a toplevel window
+                nonlocal tooltip
+                tooltip = tk.Toplevel(widget)
+                tooltip.wm_overrideredirect(True)
+                tooltip.wm_geometry(f"+{x}+{y}")
+                
+                # Create tooltip content
+                label = ttk.Label(tooltip, text=description, justify=tk.LEFT,
+                                background="#ffffaa", relief="solid", borderwidth=1,
+                                padding=(5, 3))
+                label.pack()
+                
+            def hide_tooltip(event):
+                nonlocal tooltip
+                if tooltip:
+                    tooltip.destroy()
+                    tooltip = None
+            
+            # Bind events
+            info_icon.bind("<Enter>", show_tooltip)
+            info_icon.bind("<Leave>", hide_tooltip)
 
             min_val, max_val, step = param_configs[param]
 
@@ -413,10 +464,10 @@ class NucleiCounter:
                 length=200,
                 command=lambda v, p=param, var=var: self.update_param(p, int(float(var.get())))
             )
-            slider.grid(row=row, column=1, padx=5, pady=5)
+            slider.grid(row=row, column=2, padx=5, pady=5)
 
             value_label = ttk.Label(sliders_frame, text=str(value))
-            value_label.grid(row=row, column=2, padx=5)
+            value_label.grid(row=row, column=3, padx=5)
 
             # Add reset to default button for each parameter
             reset_btn = ttk.Button(
@@ -425,7 +476,7 @@ class NucleiCounter:
                 width=6,
                 command=lambda p=param: self.reset_param_to_default(p)
             )
-            reset_btn.grid(row=row, column=3, padx=5, pady=5)
+            reset_btn.grid(row=row, column=4, padx=5, pady=5)
 
             self.sliders[param] = (var, value_label, reset_btn)
             row += 1
