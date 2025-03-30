@@ -809,6 +809,7 @@ class NucleiCounter:
         # Draw contours and number them
         for i, contour in enumerate(contours):
             cv2.drawContours(result_img, [contour], -1, (0, 255, 255), 2)
+            # Draw nucleus number only (no size data)
             M = cv2.moments(contour)
             if M["m00"] != 0:
                 cx = int(M["m10"] / M["m00"])
@@ -868,17 +869,8 @@ class NucleiCounter:
                     'contour': contour
                 })
                 
-                # Draw yellow contour
+                # Draw yellow contour only (no size labels)
                 cv2.drawContours(result_img, [contour], -1, (0, 255, 255), 2)
-                
-                # Add area label
-                M = cv2.moments(contour)
-                if M["m00"] != 0:
-                    cx = int(M["m10"] / M["m00"])
-                    cy = int(M["m01"] / M["m00"])
-                    # Add dot ID and size
-                    cv2.putText(result_img, f"R{i+1}: {area_microns:.2f}μm²", 
-                              (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
             
             # Always extract green channel for total area, regardless of analyze_green_dots setting
             green_channel = image[:, :, 1]  # green channel is index 1 in RGB
@@ -928,17 +920,8 @@ class NucleiCounter:
                         'contour': contour
                     })
                     
-                    # Draw magenta contour for green dots (to distinguish from red)
+                    # Draw magenta contour for green dots (to distinguish from red) - no size labels
                     cv2.drawContours(result_img, [contour], -1, (255, 0, 255), 2)
-                    
-                    # Add area label
-                    M = cv2.moments(contour)
-                    if M["m00"] != 0:
-                        cx = int(M["m10"] / M["m00"])
-                        cy = int(M["m01"] / M["m00"])
-                        # Add dot ID and size
-                        cv2.putText(result_img, f"G{i+1}: {area_microns:.2f}μm²", 
-                                  (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1)
         
         # Save detected dots
         self.red_dots = red_dots
