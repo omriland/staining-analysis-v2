@@ -344,11 +344,27 @@ class NucleiCounter:
             self.ui_status.config(text="Error loading image. Please try again.", foreground="red")
 
     def create_parameter_sliders(self):
-        """Create sliders for each parameter"""
+        """Create number input fields for each parameter"""
         # Clear existing widgets in the parameter frame, except info_frame and param_status
         for widget in self.param_frame.winfo_children():
             if widget != self.param_status:  # Keep param_status
                 widget.destroy()
+
+        # Add parameter descriptions
+        param_descriptions = {
+            'blue_threshold': "Pixel brightness threshold for detecting blue nuclei.\nHigher values detect fewer, brighter nuclei.",
+            'min_size': "Minimum size in pixels for a valid nucleus.\nIncrease to filter out small artifacts.",
+            'max_size': "Maximum size in pixels for a valid nucleus.\nIncrease to include larger cell clusters.",
+            'dilation_size': "Size of dilation kernel to connect fragments.\nLarger values connect more fragments.",
+            'closing_size': "Size of closing kernel for morphological operations.\nHelps fill holes in detected regions.",
+            'distance_threshold': "Distance threshold for connecting nearby fragments.\nLarger values merge more regions.",
+            'red_threshold': "Pixel brightness threshold for detecting red dots.\nHigher values detect fewer, brighter dots.",
+            'red_min_size': "Minimum size in pixels for a valid red dot.\nIncrease to filter out small artifacts.",
+            'red_max_size': "Maximum size in pixels for a valid red dot.\nIncrease to include larger dots or clusters.",
+            'green_threshold': "Pixel brightness threshold for detecting green dots.\nHigher values detect fewer, brighter dots.",
+            'green_min_size': "Minimum size in pixels for a valid green dot.\nIncrease to filter out small artifacts.",
+            'green_max_size': "Maximum size in pixels for a valid green dot.\nIncrease to include larger dots or clusters."
+        }
 
         # Add explanatory text
         info_frame = ttk.Frame(self.param_frame, borderwidth=2, relief="groove", padding=10)
@@ -361,7 +377,8 @@ class NucleiCounter:
             info_frame,
             text="• Parameters you adjust will ONLY affect the current image\n"
                  "• Each image maintains its own settings\n"
-                 "• Use 'Apply to All Images' to make current settings the new defaults",
+                 "• Use 'Apply to All Images' to make current settings the new defaults\n"
+                 "• Use up/down arrow keys when focused to adjust values",
             font=("Arial", 10),
             justify="left"
         ).pack(anchor="w", pady=5)
@@ -369,122 +386,155 @@ class NucleiCounter:
         # Re-pack the param_status for current image
         self.param_status.pack(anchor="w", pady=5)
 
-        # Parameter ranges and step sizes
-        param_configs = {
-            'blue_threshold': (0, 255, 1),
-            'min_size': (10, 500, 10),
-            'max_size': (500, 20000, 500),
-            'dilation_size': (0, 20, 1),
-            'closing_size': (0, 20, 1),
-            'distance_threshold': (1, 30, 1),
-            'red_threshold': (0, 255, 1),
-            'red_min_size': (1, 500, 10),
-            'red_max_size': (1, 500, 10)
-        }
-        
-        # Add green dot parameters if needed
-        if self.analyze_green_dots:
-            param_configs.update({
-                'green_threshold': (0, 255, 1),
-                'green_min_size': (1, 500, 10),
-                'green_max_size': (1, 500, 10)
-            })
+        # Create frame for input fields with a more organized layout
+        inputs_frame = ttk.Frame(self.param_frame)
+        inputs_frame.pack(fill=tk.BOTH, expand=True, pady=10)
 
-        # Parameter descriptions for tooltips
-        param_descriptions = {
-            'blue_threshold': "Pixel brightness threshold for detecting blue nuclei.\nHigher values detect fewer, brighter nuclei.",
-            'min_size': "Minimum size in pixels for a valid nucleus.\nIncrease to filter out small artifacts.",
-            'max_size': "Maximum size in pixels for a valid nucleus.\nIncrease to include larger cell clusters (up to 20000px).",
-            'dilation_size': "Size of dilation kernel to connect fragments.\nLarger values connect more fragments.",
-            'closing_size': "Size of closing kernel for morphological operations.\nHelps fill holes in detected regions.",
-            'distance_threshold': "Distance threshold for connecting nearby fragments.\nLarger values merge more regions.",
-            'red_threshold': "Pixel brightness threshold for detecting red dots.\nHigher values detect fewer, brighter dots.",
-            'red_min_size': "Minimum size in pixels for a valid red dot.\nIncrease to filter out small artifacts.",
-            'red_max_size': "Maximum size in pixels for a valid red dot.\nIncrease to include larger dots or clusters.",
-            'green_threshold': "Pixel brightness threshold for detecting green dots.\nHigher values detect fewer, brighter dots.",
-            'green_min_size': "Minimum size in pixels for a valid green dot.\nIncrease to filter out small artifacts.",
-            'green_max_size': "Maximum size in pixels for a valid green dot.\nIncrease to include larger dots or clusters."
-        }
+        # Add column headers
+        ttk.Label(inputs_frame, text="Parameter", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
+        ttk.Label(inputs_frame, text="Value", font=("Arial", 10, "bold")).grid(row=0, column=2, sticky=tk.W, pady=(0, 10))
+        ttk.Label(inputs_frame, text="Default", font=("Arial", 10, "bold")).grid(row=0, column=3, sticky=tk.W, pady=(0, 10))
 
-        # Create frame for sliders
-        sliders_frame = ttk.Frame(self.param_frame)
-        sliders_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        self.sliders = {}  # We'll keep the name for compatibility
+        row = 1
 
-        self.sliders = {}
-        row = 0
-
-        # Create sliders
+        # Create input fields
         for param, value in self.params.items():
-            label = ttk.Label(sliders_frame, text=param.replace('_', ' ').title())
-            label.grid(row=row, column=0, sticky=tk.W, pady=5)
+            # Parameter label with info icon
+            label_frame = ttk.Frame(inputs_frame)
+            label_frame.grid(row=row, column=0, sticky=tk.W, pady=5)
             
-            # Add info icon next to label
-            info_icon = ttk.Label(sliders_frame, text="ⓘ", foreground="blue", cursor="hand2")
-            info_icon.grid(row=row, column=1, sticky=tk.W, padx=2)
+            label = ttk.Label(label_frame, text=param.replace('_', ' ').title())
+            label.pack(side=tk.LEFT)
+            
+            info_icon = ttk.Label(label_frame, text=" ⓘ", foreground="blue", cursor="hand2")
+            info_icon.pack(side=tk.LEFT, padx=(2, 0))
             
             # Create tooltip for info icon
             tooltip = None
             
-            # Create binding for tooltip
             def show_tooltip(event, description=param_descriptions[param], widget=info_icon):
                 x, y, _, _ = widget.bbox("insert")
                 x += widget.winfo_rootx() + 15
                 y += widget.winfo_rooty() + 10
                 
-                # Create a toplevel window
                 nonlocal tooltip
                 tooltip = tk.Toplevel(widget)
                 tooltip.wm_overrideredirect(True)
                 tooltip.wm_geometry(f"+{x}+{y}")
                 
-                # Create tooltip content
                 label = ttk.Label(tooltip, text=description, justify=tk.LEFT,
                                 background="#ffffaa", relief="solid", borderwidth=1,
                                 padding=(5, 3))
                 label.pack()
-                
+            
             def hide_tooltip(event):
                 nonlocal tooltip
                 if tooltip:
                     tooltip.destroy()
                     tooltip = None
             
-            # Bind events
             info_icon.bind("<Enter>", show_tooltip)
             info_icon.bind("<Leave>", hide_tooltip)
 
-            min_val, max_val, step = param_configs[param]
-
-            var = tk.IntVar(value=value)
-            slider = ttk.Scale(
-                sliders_frame,
-                from_=min_val,
-                to=max_val,
-                variable=var,
-                orient=tk.HORIZONTAL,
-                length=280,  # Increase slider length to utilize wider panel
-                command=lambda v, p=param, var=var: self.update_param(p, int(float(var.get())))
-            )
-            slider.grid(row=row, column=2, padx=5, pady=5)
-
-            value_label = ttk.Label(sliders_frame, text=str(value))
-            value_label.grid(row=row, column=3, padx=5)
-
-            # Add reset to default button for each parameter
+            # Create variable for the input
+            var = tk.StringVar(value=str(value))
+            
+            # Create entry widget
+            entry = ttk.Entry(inputs_frame, textvariable=var, width=10)
+            entry.grid(row=row, column=2, padx=5, pady=5)
+            
+            # Show default value
+            default_label = ttk.Label(inputs_frame, text=str(self.default_params[param]))
+            default_label.grid(row=row, column=3, padx=5, pady=5)
+            
+            # Add validation
+            def validate_input(P):
+                if P == "": return True
+                try:
+                    float(P)
+                    return True
+                except ValueError:
+                    return False
+            
+            vcmd = (self.root.register(validate_input), '%P')
+            entry.config(validate='key', validatecommand=vcmd)
+            
+            # Add up/down arrow key bindings
+            def on_up_arrow(event):
+                try:
+                    current = float(var.get() or 0)
+                    new_value = int(current + 1)
+                    var.set(str(new_value))
+                    self.update_param(param, new_value)
+                except ValueError:
+                    pass
+                return "break"
+            
+            def on_down_arrow(event):
+                try:
+                    current = float(var.get() or 0)
+                    new_value = int(current - 1)
+                    if new_value >= 0:  # Prevent negative values
+                        var.set(str(new_value))
+                        self.update_param(param, new_value)
+                except ValueError:
+                    pass
+                return "break"
+            
+            entry.bind('<Up>', on_up_arrow)
+            entry.bind('<Down>', on_down_arrow)
+            
+            # Add trace for value changes with immediate update
+            def on_value_change(*args, p=param, v=var):
+                try:
+                    value = v.get().strip()
+                    if value:  # Only update if there's a value
+                        new_value = int(float(value))
+                        self.update_param(p, new_value)
+                except ValueError:
+                    pass
+            
+            var.trace_add("write", on_value_change)
+            
+            # Add validation and immediate update on Enter key
+            def on_enter(event):
+                try:
+                    value = var.get().strip()
+                    if value:
+                        new_value = int(float(value))
+                        self.update_param(param, new_value)
+                except ValueError:
+                    # If invalid, reset to previous valid value
+                    var.set(str(self.params[param]))
+                return "break"  # Prevent default Enter behavior
+            
+            entry.bind('<Return>', on_enter)
+            
+            # Add focus out handler to validate and update
+            def on_focus_out(event):
+                try:
+                    value = var.get().strip()
+                    if value:
+                        new_value = int(float(value))
+                        self.update_param(param, new_value)
+                except ValueError:
+                    # If invalid, reset to previous valid value
+                    var.set(str(self.params[param]))
+            
+            entry.bind('<FocusOut>', on_focus_out)
+            
+            # Add reset button
             reset_btn = ttk.Button(
-                sliders_frame,
+                inputs_frame,
                 text="Reset",
                 width=6,
                 command=lambda p=param: self.reset_param_to_default(p)
             )
             reset_btn.grid(row=row, column=4, padx=5, pady=5)
-
-            self.sliders[param] = (var, value_label, reset_btn)
+            
+            self.sliders[param] = (var, entry, reset_btn)
             row += 1
-
-            # Set initial value and trace changes
-            var.trace_add("write", lambda *args, p=param, v=var, l=value_label:
-            l.config(text=str(int(float(v.get())))))
 
         # Parameter action buttons
         actions_frame = ttk.Frame(self.param_frame)
@@ -546,22 +596,22 @@ class NucleiCounter:
     def reset_param_to_default(self, param):
         """Reset a specific parameter to its default value"""
         default_value = self.default_params[param]
-
-        # Update slider
-        slider_var, _, _ = self.sliders[param]
-        slider_var.set(default_value)
-
+        
+        # Update input field
+        var, _, _ = self.sliders[param]
+        var.set(str(default_value))
+        
         # This will trigger update_param through the trace
 
     def reset_all_params(self):
         """Reset all parameters to default values"""
-        for param, (slider_var, _, _) in self.sliders.items():
-            slider_var.set(self.default_params[param])
-
+        for param, (var, _, _) in self.sliders.items():
+            var.set(str(self.default_params[param]))
+        
         # Update status
         if self.current_filename in self.image_params:
             del self.image_params[self.current_filename]
-
+        
         self.param_modified = False
         self.param_status.config(text="Using default parameters")
 
@@ -668,8 +718,8 @@ class NucleiCounter:
 
         # Update sliders if they exist
         if hasattr(self, 'sliders') and self.sliders:
-            for param, (slider_var, value_label, _) in self.sliders.items():
-                slider_var.set(self.params[param])
+            for param, (var, _, _) in self.sliders.items():
+                var.set(str(self.params[param]))
 
         # Update navigation status
         current_idx = self.current_file_index + 1
