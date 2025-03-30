@@ -231,7 +231,8 @@ class NucleiCounter:
         content_frame.pack(fill=tk.BOTH, expand=True, pady=10)
 
         # Left frame for parameters - set fixed width
-        self.param_frame = ttk.LabelFrame(content_frame, text="Parameters", padding=10, width=350)
+        # Increase the parameter panel width by 30% (from 350 to 455)
+        self.param_frame = ttk.LabelFrame(content_frame, text="Parameters", padding=10, width=455)
         self.param_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
         self.param_frame.pack_propagate(False)  # Prevent frame from shrinking
 
@@ -461,7 +462,7 @@ class NucleiCounter:
                 to=max_val,
                 variable=var,
                 orient=tk.HORIZONTAL,
-                length=200,
+                length=280,  # Increase slider length to utilize wider panel
                 command=lambda v, p=param, var=var: self.update_param(p, int(float(var.get())))
             )
             slider.grid(row=row, column=2, padx=5, pady=5)
