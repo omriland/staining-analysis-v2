@@ -1,6 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+# This script:
+# 0. Let the use select a folder with TIFF images
+# 1. Identifies blue stains in TIFF images [nuclei] --> count them and let you control the threshold live
+# 2. Counts the total number of red dots and their area in microns
+# 3. Counts the total number of green dots (only when checking the checkbox at the beginning of the run) and calculate their area
+# 4. Extract: processed images, each image data (count of dots and area of each dot) and a summary Excel sheet with:
+# File name, Total blue stains, total red dots, total red area, red dots/blue stains, total red area/blue stains,
+# avg red dot size, total green dots, green dot/blue stains total green area, total green area/blue stains
+
+# Error handling: all errors are printed to console. If no TIFF file exist in the folder a message will prompt
+# Custom controls: you may change the thresholds per image easily by using the slider on the GUI. By default, changes will only affect the current image.
+# If you wish to totally change the values for all images in this batch, click 'apply to all'
+
+####################################################
+
 # Required imports
 import os
 import sys
