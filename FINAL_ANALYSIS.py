@@ -706,7 +706,14 @@ class NucleiCounter:
             self.preview_axs[1].imshow(result_img)
         else:
             self.preview_axs[1].imshow(result_img, cmap='gray')
-        self.preview_axs[1].set_title("Detected Nuclei and Red Dots")
+            
+        # Set title with color legend
+        title = "Detection Results"
+        if self.analyze_green_dots:
+            title += " (Yellow: Blue nuclei & Red dots, Magenta: Green dots)"
+        else:
+            title += " (Yellow outlines: Blue nuclei & Red dots)"
+        self.preview_axs[1].set_title(title)
 
         # Add title with count information
         title_text = f"Preview: {self.current_filename}\nNuclei: {count} (Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)}) | Red Dots: {len(self.red_dots)}"
@@ -806,23 +813,24 @@ class NucleiCounter:
         # Find contours of nuclei
         contours, _ = cv2.findContours(nuclei_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # Draw contours and number them
+        # Draw contours and number them - using thinner lines (30% of original 2px thickness)
+        nuclei_line_thickness = int(2 * 0.3) if int(2 * 0.3) >= 1 else 1  # Ensure minimum thickness of 1
         for i, contour in enumerate(contours):
-            cv2.drawContours(result_img, [contour], -1, (0, 255, 255), 2)
+            cv2.drawContours(result_img, [contour], -1, (0, 255, 255), nuclei_line_thickness)
             # Draw nucleus number only (no size data)
             M = cv2.moments(contour)
             if M["m00"] != 0:
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
-                cv2.putText(result_img, str(i + 1), (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.putText(result_img, str(i + 1), (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 1)
 
         # Add manually marked nuclei
         for i, (x, y) in enumerate(self.manual_nuclei):
-            # Draw a circle for each manually added nucleus
-            cv2.circle(result_img, (x, y), 15, (0, 255, 255), 2)
+            # Draw a circle for each manually added nucleus - thinner line
+            cv2.circle(result_img, (x, y), 15, (0, 255, 255), nuclei_line_thickness)
             # Label with number continuing from automatic detections
             cv2.putText(result_img, str(len(contours) + i + 1), (x, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 1)
 
         # Process red channel if the image is RGB
         red_dots = []
@@ -855,6 +863,9 @@ class NucleiCounter:
             # Find contours of red dots
             red_contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             
+            # Calculate thinner line thickness for dots (30% of original 2px)
+            dot_line_thickness = int(2 * 0.3) if int(2 * 0.3) >= 1 else 1  # Ensure minimum thickness of 1
+            
             # Draw contours on result image
             for i, contour in enumerate(red_contours):
                 # Calculate size in microns
@@ -869,8 +880,9 @@ class NucleiCounter:
                     'contour': contour
                 })
                 
-                # Draw yellow contour only (no size labels)
-                cv2.drawContours(result_img, [contour], -1, (0, 255, 255), 2)
+                # Draw yellow contour for red dots with thinner line
+                # Yellow color in BGR is (0, 255, 255)
+                cv2.drawContours(result_img, [contour], -1, (0, 255, 255), dot_line_thickness)
             
             # Always extract green channel for total area, regardless of analyze_green_dots setting
             green_channel = image[:, :, 1]  # green channel is index 1 in RGB
@@ -920,8 +932,9 @@ class NucleiCounter:
                         'contour': contour
                     })
                     
-                    # Draw magenta contour for green dots (to distinguish from red) - no size labels
-                    cv2.drawContours(result_img, [contour], -1, (255, 0, 255), 2)
+                    # Draw magenta contour for green dots with thinner line
+                    # Magenta color in BGR is (255, 0, 255)
+                    cv2.drawContours(result_img, [contour], -1, (255, 0, 255), dot_line_thickness)
         
         # Save detected dots
         self.red_dots = red_dots
@@ -1265,9 +1278,17 @@ class NucleiCounter:
             )
             
         message += f"\nResults saved to {self.output_dir}\nExcel report: staining_analysis_report.xlsx"
-
-        # Show completion message
+        
+        # Show message and schedule application close
         messagebox.showinfo("Processing Complete", message)
+        print("Processing completed. Closing application.")
+        self.root.after(200, self.close_application)
+    
+    def close_application(self):
+        """Close the application safely"""
+        self.root.quit()
+        self.root.destroy()
+        sys.exit(0)  # Ensure the script terminates
 
 
 # Run the application
