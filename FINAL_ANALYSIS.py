@@ -1,6 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+# This script:
+# 0. Let the use select a folder with TIFF images
+# 1. Identifies blue stains in TIFF images [nuclei] --> count them and let you control the threshold live
+# 2. Counts the total number of red dots and their area in microns
+# 3. Counts the total number of green dots (only when checking the checkbox at the beginning of the run) and calculate their area
+# 4. Extract: processed images, each image data (count of dots and area of each dot) and a summary Excel sheet with:
+# File name, Total blue stains, total red dots, total red area, red dots/blue stains, total red area/blue stains,
+# avg red dot size, total green dots, green dot/blue stains total green area, total green area/blue stains
+
+# Error handling: all errors are printed to console. If no TIFF file exist in the folder a message will prompt
+# Custom controls: you may change the thresholds per image easily by using the slider on the GUI. By default, changes will only affect the current image.
+# If you wish to totally change the values for all images in this batch, click 'apply to all'
+
+####################################################
+
 # Required imports
 import os
 import sys
@@ -99,7 +114,7 @@ class NucleiCounter:
                 'distance_threshold': 15,  # Distance threshold for connecting fragments
                 'red_threshold': 100,  # Threshold for red channel
                 'red_min_size': 5,  # Minimum red dot size in pixels
-                'red_max_size': 500  # Maximum red dot size in pixels
+                'red_max_size': 200  # Maximum red dot size in pixels - adjusted to more central value
             }
             
             # Add green dot parameters if needed
@@ -108,7 +123,7 @@ class NucleiCounter:
                 self.default_params.update({
                     'green_threshold': 100,  # Threshold for green channel
                     'green_min_size': 5,  # Minimum green dot size in pixels
-                    'green_max_size': 500  # Maximum green dot size in pixels
+                    'green_max_size': 200  # Maximum green dot size in pixels - adjusted to more central value
                 })
             
             # Micron conversion factor
@@ -216,7 +231,8 @@ class NucleiCounter:
         content_frame.pack(fill=tk.BOTH, expand=True, pady=10)
 
         # Left frame for parameters - set fixed width
-        self.param_frame = ttk.LabelFrame(content_frame, text="Parameters", padding=10, width=350)
+        # Increase the parameter panel width by 30% (from 350 to 455)
+        self.param_frame = ttk.LabelFrame(content_frame, text="Parameters", padding=10, width=455)
         self.param_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
         self.param_frame.pack_propagate(False)  # Prevent frame from shrinking
 
@@ -328,11 +344,27 @@ class NucleiCounter:
             self.ui_status.config(text="Error loading image. Please try again.", foreground="red")
 
     def create_parameter_sliders(self):
-        """Create sliders for each parameter"""
+        """Create number input fields for each parameter"""
         # Clear existing widgets in the parameter frame, except info_frame and param_status
         for widget in self.param_frame.winfo_children():
             if widget != self.param_status:  # Keep param_status
                 widget.destroy()
+
+        # Add parameter descriptions
+        param_descriptions = {
+            'blue_threshold': "Pixel brightness threshold for detecting blue nuclei.\nHigher values detect fewer, brighter nuclei.",
+            'min_size': "Minimum size in pixels for a valid nucleus.\nIncrease to filter out small artifacts.",
+            'max_size': "Maximum size in pixels for a valid nucleus.\nIncrease to include larger cell clusters.",
+            'dilation_size': "Size of dilation kernel to connect fragments.\nLarger values connect more fragments.",
+            'closing_size': "Size of closing kernel for morphological operations.\nHelps fill holes in detected regions.",
+            'distance_threshold': "Distance threshold for connecting nearby fragments.\nLarger values merge more regions.",
+            'red_threshold': "Pixel brightness threshold for detecting red dots.\nHigher values detect fewer, brighter dots.",
+            'red_min_size': "Minimum size in pixels for a valid red dot.\nIncrease to filter out small artifacts.",
+            'red_max_size': "Maximum size in pixels for a valid red dot.\nIncrease to include larger dots or clusters.",
+            'green_threshold': "Pixel brightness threshold for detecting green dots.\nHigher values detect fewer, brighter dots.",
+            'green_min_size': "Minimum size in pixels for a valid green dot.\nIncrease to filter out small artifacts.",
+            'green_max_size': "Maximum size in pixels for a valid green dot.\nIncrease to include larger dots or clusters."
+        }
 
         # Add explanatory text
         info_frame = ttk.Frame(self.param_frame, borderwidth=2, relief="groove", padding=10)
@@ -345,7 +377,8 @@ class NucleiCounter:
             info_frame,
             text="• Parameters you adjust will ONLY affect the current image\n"
                  "• Each image maintains its own settings\n"
-                 "• Use 'Apply to All Images' to make current settings the new defaults",
+                 "• Use 'Apply to All Images' to make current settings the new defaults\n"
+                 "• Use up/down arrow keys when focused to adjust values",
             font=("Arial", 10),
             justify="left"
         ).pack(anchor="w", pady=5)
@@ -353,71 +386,155 @@ class NucleiCounter:
         # Re-pack the param_status for current image
         self.param_status.pack(anchor="w", pady=5)
 
-        # Parameter ranges and step sizes
-        param_configs = {
-            'blue_threshold': (0, 255, 1),
-            'min_size': (10, 500, 10),
-            'max_size': (500, 10000, 100),
-            'dilation_size': (0, 20, 1),
-            'closing_size': (0, 20, 1),
-            'distance_threshold': (1, 30, 1),
-            'red_threshold': (0, 255, 1),
-            'red_min_size': (1, 500, 10),
-            'red_max_size': (1, 500, 10)
-        }
-        
-        # Add green dot parameters if needed
-        if self.analyze_green_dots:
-            param_configs.update({
-                'green_threshold': (0, 255, 1),
-                'green_min_size': (1, 500, 10),
-                'green_max_size': (1, 500, 10)
-            })
+        # Create frame for input fields with a more organized layout
+        inputs_frame = ttk.Frame(self.param_frame)
+        inputs_frame.pack(fill=tk.BOTH, expand=True, pady=10)
 
-        # Create frame for sliders
-        sliders_frame = ttk.Frame(self.param_frame)
-        sliders_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        # Add column headers
+        ttk.Label(inputs_frame, text="Parameter", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
+        ttk.Label(inputs_frame, text="Value", font=("Arial", 10, "bold")).grid(row=0, column=2, sticky=tk.W, pady=(0, 10))
+        ttk.Label(inputs_frame, text="Default", font=("Arial", 10, "bold")).grid(row=0, column=3, sticky=tk.W, pady=(0, 10))
 
-        self.sliders = {}
-        row = 0
+        self.sliders = {}  # We'll keep the name for compatibility
+        row = 1
 
-        # Create sliders
+        # Create input fields
         for param, value in self.params.items():
-            label = ttk.Label(sliders_frame, text=param.replace('_', ' ').title())
-            label.grid(row=row, column=0, sticky=tk.W, pady=5)
+            # Parameter label with info icon
+            label_frame = ttk.Frame(inputs_frame)
+            label_frame.grid(row=row, column=0, sticky=tk.W, pady=5)
+            
+            label = ttk.Label(label_frame, text=param.replace('_', ' ').title())
+            label.pack(side=tk.LEFT)
+            
+            info_icon = ttk.Label(label_frame, text=" ⓘ", foreground="blue", cursor="hand2")
+            info_icon.pack(side=tk.LEFT, padx=(2, 0))
+            
+            # Create tooltip for info icon
+            tooltip = None
+            
+            def show_tooltip(event, description=param_descriptions[param], widget=info_icon):
+                x, y, _, _ = widget.bbox("insert")
+                x += widget.winfo_rootx() + 15
+                y += widget.winfo_rooty() + 10
+                
+                nonlocal tooltip
+                tooltip = tk.Toplevel(widget)
+                tooltip.wm_overrideredirect(True)
+                tooltip.wm_geometry(f"+{x}+{y}")
+                
+                label = ttk.Label(tooltip, text=description, justify=tk.LEFT,
+                                background="#ffffaa", relief="solid", borderwidth=1,
+                                padding=(5, 3))
+                label.pack()
+            
+            def hide_tooltip(event):
+                nonlocal tooltip
+                if tooltip:
+                    tooltip.destroy()
+                    tooltip = None
+            
+            info_icon.bind("<Enter>", show_tooltip)
+            info_icon.bind("<Leave>", hide_tooltip)
 
-            min_val, max_val, step = param_configs[param]
-
-            var = tk.IntVar(value=value)
-            slider = ttk.Scale(
-                sliders_frame,
-                from_=min_val,
-                to=max_val,
-                variable=var,
-                orient=tk.HORIZONTAL,
-                length=200,
-                command=lambda v, p=param, var=var: self.update_param(p, int(float(var.get())))
-            )
-            slider.grid(row=row, column=1, padx=5, pady=5)
-
-            value_label = ttk.Label(sliders_frame, text=str(value))
-            value_label.grid(row=row, column=2, padx=5)
-
-            # Add reset to default button for each parameter
+            # Create variable for the input
+            var = tk.StringVar(value=str(value))
+            
+            # Create entry widget
+            entry = ttk.Entry(inputs_frame, textvariable=var, width=10)
+            entry.grid(row=row, column=2, padx=5, pady=5)
+            
+            # Show default value
+            default_label = ttk.Label(inputs_frame, text=str(self.default_params[param]))
+            default_label.grid(row=row, column=3, padx=5, pady=5)
+            
+            # Add validation
+            def validate_input(P):
+                if P == "": return True
+                try:
+                    float(P)
+                    return True
+                except ValueError:
+                    return False
+            
+            vcmd = (self.root.register(validate_input), '%P')
+            entry.config(validate='key', validatecommand=vcmd)
+            
+            # Add up/down arrow key bindings
+            def on_up_arrow(event):
+                try:
+                    current = float(var.get() or 0)
+                    new_value = int(current + 1)
+                    var.set(str(new_value))
+                    self.update_param(param, new_value)
+                except ValueError:
+                    pass
+                return "break"
+            
+            def on_down_arrow(event):
+                try:
+                    current = float(var.get() or 0)
+                    new_value = int(current - 1)
+                    if new_value >= 0:  # Prevent negative values
+                        var.set(str(new_value))
+                        self.update_param(param, new_value)
+                except ValueError:
+                    pass
+                return "break"
+            
+            entry.bind('<Up>', on_up_arrow)
+            entry.bind('<Down>', on_down_arrow)
+            
+            # Add trace for value changes with immediate update
+            def on_value_change(*args, p=param, v=var):
+                try:
+                    value = v.get().strip()
+                    if value:  # Only update if there's a value
+                        new_value = int(float(value))
+                        self.update_param(p, new_value)
+                except ValueError:
+                    pass
+            
+            var.trace_add("write", on_value_change)
+            
+            # Add validation and immediate update on Enter key
+            def on_enter(event):
+                try:
+                    value = var.get().strip()
+                    if value:
+                        new_value = int(float(value))
+                        self.update_param(param, new_value)
+                except ValueError:
+                    # If invalid, reset to previous valid value
+                    var.set(str(self.params[param]))
+                return "break"  # Prevent default Enter behavior
+            
+            entry.bind('<Return>', on_enter)
+            
+            # Add focus out handler to validate and update
+            def on_focus_out(event):
+                try:
+                    value = var.get().strip()
+                    if value:
+                        new_value = int(float(value))
+                        self.update_param(param, new_value)
+                except ValueError:
+                    # If invalid, reset to previous valid value
+                    var.set(str(self.params[param]))
+            
+            entry.bind('<FocusOut>', on_focus_out)
+            
+            # Add reset button
             reset_btn = ttk.Button(
-                sliders_frame,
+                inputs_frame,
                 text="Reset",
                 width=6,
                 command=lambda p=param: self.reset_param_to_default(p)
             )
-            reset_btn.grid(row=row, column=3, padx=5, pady=5)
-
-            self.sliders[param] = (var, value_label, reset_btn)
+            reset_btn.grid(row=row, column=4, padx=5, pady=5)
+            
+            self.sliders[param] = (var, entry, reset_btn)
             row += 1
-
-            # Set initial value and trace changes
-            var.trace_add("write", lambda *args, p=param, v=var, l=value_label:
-            l.config(text=str(int(float(v.get())))))
 
         # Parameter action buttons
         actions_frame = ttk.Frame(self.param_frame)
@@ -479,22 +596,22 @@ class NucleiCounter:
     def reset_param_to_default(self, param):
         """Reset a specific parameter to its default value"""
         default_value = self.default_params[param]
-
-        # Update slider
-        slider_var, _, _ = self.sliders[param]
-        slider_var.set(default_value)
-
+        
+        # Update input field
+        var, _, _ = self.sliders[param]
+        var.set(str(default_value))
+        
         # This will trigger update_param through the trace
 
     def reset_all_params(self):
         """Reset all parameters to default values"""
-        for param, (slider_var, _, _) in self.sliders.items():
-            slider_var.set(self.default_params[param])
-
+        for param, (var, _, _) in self.sliders.items():
+            var.set(str(self.default_params[param]))
+        
         # Update status
         if self.current_filename in self.image_params:
             del self.image_params[self.current_filename]
-
+        
         self.param_modified = False
         self.param_status.config(text="Using default parameters")
 
@@ -601,8 +718,8 @@ class NucleiCounter:
 
         # Update sliders if they exist
         if hasattr(self, 'sliders') and self.sliders:
-            for param, (slider_var, value_label, _) in self.sliders.items():
-                slider_var.set(self.params[param])
+            for param, (var, _, _) in self.sliders.items():
+                var.set(str(self.params[param]))
 
         # Update navigation status
         current_idx = self.current_file_index + 1
@@ -691,7 +808,14 @@ class NucleiCounter:
             self.preview_axs[1].imshow(result_img)
         else:
             self.preview_axs[1].imshow(result_img, cmap='gray')
-        self.preview_axs[1].set_title("Detected Nuclei and Red Dots")
+            
+        # Set title with color legend
+        title = "Detection Results"
+        if self.analyze_green_dots:
+            title += " (Yellow: nuclei, Cyan: Red, Magenta: Green)"
+        else:
+            title += " (Yellow: nuclei, Cyan: Red)"
+        self.preview_axs[1].set_title(title)
 
         # Add title with count information
         title_text = f"Preview: {self.current_filename}\nNuclei: {count} (Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)}) | Red Dots: {len(self.red_dots)}"
@@ -770,6 +894,20 @@ class NucleiCounter:
             binary = cv2.dilate(binary, dilation_kernel, iterations=1)
             binary = cv2.erode(binary, dilation_kernel, iterations=1)
 
+        # Apply distance threshold to merge nearby objects
+        distance_threshold = self.params['distance_threshold']
+        if distance_threshold > 1:
+            # Create distance transform
+            dist_transform = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+            # Threshold the distance transform to get markers
+            _, dist_thresh = cv2.threshold(dist_transform, distance_threshold, 255, cv2.THRESH_BINARY)
+            dist_thresh = np.uint8(dist_thresh)
+            # Use these markers with watershed to merge nearby objects
+            markers = measure.label(dist_thresh)
+            binary = segmentation.watershed(-dist_transform, markers, mask=binary)
+            # Convert back to binary
+            binary = np.uint8(binary > 0) * 255
+
         # Label connected components
         labels = measure.label(binary)
         regions = measure.regionprops(labels)
@@ -791,22 +929,29 @@ class NucleiCounter:
         # Find contours of nuclei
         contours, _ = cv2.findContours(nuclei_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
+        # Set line thickness - using a fixed value to ensure visibility
+        nuclei_line_thickness = 2  # Using 2px for better visibility
+
         # Draw contours and number them
+        # Use cyan (255, 255, 0) in BGR format for blue nuclei
+        nuclei_color = (255, 255, 0)  # Cyan color for blue nuclei in BGR format
+        
         for i, contour in enumerate(contours):
-            cv2.drawContours(result_img, [contour], -1, (0, 255, 255), 2)
+            cv2.drawContours(result_img, [contour], -1, nuclei_color, nuclei_line_thickness)
+            # Draw nucleus number only (no size data)
             M = cv2.moments(contour)
             if M["m00"] != 0:
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
-                cv2.putText(result_img, str(i + 1), (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.putText(result_img, str(i + 1), (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, nuclei_color, 1)
 
         # Add manually marked nuclei
         for i, (x, y) in enumerate(self.manual_nuclei):
             # Draw a circle for each manually added nucleus
-            cv2.circle(result_img, (x, y), 15, (0, 255, 255), 2)
+            cv2.circle(result_img, (x, y), 15, nuclei_color, nuclei_line_thickness)
             # Label with number continuing from automatic detections
             cv2.putText(result_img, str(len(contours) + i + 1), (x, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, nuclei_color, 1)
 
         # Process red channel if the image is RGB
         red_dots = []
@@ -839,6 +984,12 @@ class NucleiCounter:
             # Find contours of red dots
             red_contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             
+            # Use same line thickness for dots as for nuclei
+            dot_line_thickness = 2  # Using 2px for better visibility
+            
+            # Define colors for the dots
+            red_dot_color = (0, 255, 255)  # Yellow color for red dots in BGR format
+            
             # Draw contours on result image
             for i, contour in enumerate(red_contours):
                 # Calculate size in microns
@@ -853,17 +1004,8 @@ class NucleiCounter:
                     'contour': contour
                 })
                 
-                # Draw yellow contour
-                cv2.drawContours(result_img, [contour], -1, (0, 255, 255), 2)
-                
-                # Add area label
-                M = cv2.moments(contour)
-                if M["m00"] != 0:
-                    cx = int(M["m10"] / M["m00"])
-                    cy = int(M["m01"] / M["m00"])
-                    # Add dot ID and size
-                    cv2.putText(result_img, f"R{i+1}: {area_microns:.2f}μm²", 
-                              (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                # Draw yellow contour for red dots
+                cv2.drawContours(result_img, [contour], -1, red_dot_color, dot_line_thickness)
             
             # Always extract green channel for total area, regardless of analyze_green_dots setting
             green_channel = image[:, :, 1]  # green channel is index 1 in RGB
@@ -899,6 +1041,9 @@ class NucleiCounter:
                 # Find contours of green dots
                 green_contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 
+                # Define magenta color for green dots
+                green_dot_color = (255, 0, 255)  # Magenta color for green dots in BGR format
+                
                 # Draw contours on result image
                 for i, contour in enumerate(green_contours):
                     # Calculate size in microns
@@ -913,17 +1058,8 @@ class NucleiCounter:
                         'contour': contour
                     })
                     
-                    # Draw magenta contour for green dots (to distinguish from red)
-                    cv2.drawContours(result_img, [contour], -1, (255, 0, 255), 2)
-                    
-                    # Add area label
-                    M = cv2.moments(contour)
-                    if M["m00"] != 0:
-                        cx = int(M["m10"] / M["m00"])
-                        cy = int(M["m01"] / M["m00"])
-                        # Add dot ID and size
-                        cv2.putText(result_img, f"G{i+1}: {area_microns:.2f}μm²", 
-                                  (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1)
+                    # Draw magenta contour for green dots
+                    cv2.drawContours(result_img, [contour], -1, green_dot_color, dot_line_thickness)
         
         # Save detected dots
         self.red_dots = red_dots
@@ -1267,9 +1403,17 @@ class NucleiCounter:
             )
             
         message += f"\nResults saved to {self.output_dir}\nExcel report: staining_analysis_report.xlsx"
-
-        # Show completion message
+        
+        # Show message and schedule application close
         messagebox.showinfo("Processing Complete", message)
+        print("Processing completed. Closing application.")
+        self.root.after(200, self.close_application)
+    
+    def close_application(self):
+        """Close the application safely"""
+        self.root.quit()
+        self.root.destroy()
+        sys.exit(0)  # Ensure the script terminates
 
 
 # Run the application
