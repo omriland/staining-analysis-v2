@@ -47,18 +47,51 @@ class NucleiCounter:
         sys.excepthook = self.handle_exception
         
         # Start with a small window size for the initial dialog
-        self.root.geometry("400x150")
+        self.root.geometry("400x200")  # Made window slightly taller
         self.root.update_idletasks()  # To ensure geometry is applied
         
         # Center the initial dialog
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         x = (screen_width - 400) // 2
-        y = (screen_height - 150) // 2
-        self.root.geometry(f"400x150+{x}+{y}")
+        y = (screen_height - 200) // 2
+        self.root.geometry(f"400x200+{x}+{y}")
         
-        # Ask user if they want to analyze green dots
+        # Initialize analysis flags
         self.analyze_green_dots = False
+        self.analyze_nearest_nucleus = False
+        
+        # Initialize data storage
+        self.nucleus_intensities = {}  # Store intensities for each nucleus
+        self.nucleus_dot_associations = {}  # Store dot associations for each nucleus
+        self.total_green_area_microns = 0  # Initialize total green area
+        
+        # Initialize image data
+        self.current_image = None
+        self.current_filename = None
+        self.input_dir = None
+        self.output_dir = None
+        self.tiff_files = []
+        self.current_file_index = 0
+        
+        # Initialize results storage
+        self.total_results = []
+        self.red_dots = []
+        self.green_dots = []
+        self.manual_nuclei = []
+        self.stored_manual_nuclei = {}
+        self.stored_red_dots = {}
+        self.stored_green_dots = {}
+        
+        # Initialize UI elements
+        self.preview_fig = None
+        self.preview_axs = None
+        self.canvas = None
+        self.param_frame = None
+        self.sliders = {}
+        self.param_modified = False
+        
+        # Create initial dialog
         self.initial_frame = ttk.Frame(self.root, padding=20)
         self.initial_frame.pack(fill=tk.BOTH, expand=True)
         
@@ -68,10 +101,11 @@ class NucleiCounter:
         ttk.Checkbutton(self.initial_frame, text="Analyze green dots in addition to red dots", 
                          variable=self.green_var).pack(pady=5, anchor=tk.W)
         
-        ttk.Button(self.initial_frame, text="Start Analysis", command=self.start_analysis).pack(pady=15)
+        self.nearest_nucleus_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self.initial_frame, text="Analyze nearest nucleus for each red dot", 
+                         variable=self.nearest_nucleus_var).pack(pady=5, anchor=tk.W)
         
-        # Wait for user to click the Start Analysis button
-        # Don't use wait_variable here as it causes issues
+        ttk.Button(self.initial_frame, text="Start Analysis", command=self.start_analysis).pack(pady=15)
         
         # Run the main loop
         self.root.mainloop()
@@ -96,7 +130,9 @@ class NucleiCounter:
         try:
             print("Starting analysis...")
             self.analyze_green_dots = self.green_var.get()
+            self.analyze_nearest_nucleus = self.nearest_nucleus_var.get()  # Get nearest nucleus analysis preference
             print(f"Analyze green dots: {self.analyze_green_dots}")
+            print(f"Analyze nearest nucleus: {self.analyze_nearest_nucleus}")
             
             # Destroy initial dialog
             self.initial_frame.destroy()
@@ -187,7 +223,7 @@ class NucleiCounter:
             widget.destroy()
             
         # Reset window size
-        self.root.geometry("400x150")
+        self.root.geometry("400x200")
         
         # Recreate the initial dialog
         self.initial_frame = ttk.Frame(self.root, padding=20)
@@ -198,6 +234,10 @@ class NucleiCounter:
         self.green_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(self.initial_frame, text="Analyze green dots in addition to red dots", 
                          variable=self.green_var).pack(pady=5, anchor=tk.W)
+        
+        self.nearest_nucleus_var = tk.BooleanVar(value=False)  # New variable for nearest nucleus analysis
+        ttk.Checkbutton(self.initial_frame, text="Analyze nearest nucleus for each red dot", 
+                         variable=self.nearest_nucleus_var).pack(pady=5, anchor=tk.W)
         
         ttk.Button(self.initial_frame, text="Start Analysis", command=self.start_analysis).pack(pady=15)
         
@@ -642,6 +682,7 @@ class NucleiCounter:
 
     def load_current_image(self):
         """Load the current image based on index"""
+        print("Starting load_current_image...")
         if not self.tiff_files or self.current_file_index >= len(self.tiff_files):
             print("No files to load or index out of range")
             return False
@@ -676,6 +717,7 @@ class NucleiCounter:
                 raise ValueError(f"Unexpected image shape: {image.shape}")
 
             self.current_image = (image, blue_channel)
+            print("Current image set successfully")
 
             # Debug information about loaded image
             print(f"Current image dimensions: {image.shape}")
@@ -683,8 +725,8 @@ class NucleiCounter:
             print(f"Blue channel min/max: {blue_channel.min()}/{blue_channel.max()}")
 
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load image {filename}: {e}")
             print(f"Error loading image: {str(e)}")
+            messagebox.showerror("Error", f"Failed to load image {filename}: {e}")
             return False
 
         # Retrieve any stored manual nuclei for this image
@@ -726,7 +768,9 @@ class NucleiCounter:
         self.status_label.config(text=f"Image {current_idx} of {len(self.tiff_files)}: {filename}")
 
         # Update preview
+        print("Initializing preview...")
         self.initialize_preview()
+        print("Preview initialized")
 
         # Update navigation buttons
         self.prev_btn.config(state=tk.NORMAL if self.current_file_index > 0 else tk.DISABLED)
@@ -736,12 +780,16 @@ class NucleiCounter:
 
     def initialize_preview(self):
         """Initialize or update the preview matplotlib figure"""
+        print("Starting initialize_preview...")
         if self.current_image is None:
+            print("No current image available")
             return
 
+        print(f"Processing image with shape: {self.current_image[0].shape}")
         # Process the image
         binary, nuclei_mask, result_img, count = self.process_image(
             self.current_image[0], self.current_image[1])
+        print(f"Image processed. Count: {count}")
 
         # Update count label
         count_text = f"Nuclei count: {count} (Auto: {count - len(self.manual_nuclei)}, Manual: {len(self.manual_nuclei)}) | Red dots: {len(self.red_dots)}"
@@ -751,6 +799,7 @@ class NucleiCounter:
 
         # Create or update matplotlib figure
         if self.preview_fig is None:
+            print("Creating new preview figure")
             # Create new figure
             self.preview_fig = plt.figure(figsize=(10, 8))
 
@@ -776,15 +825,21 @@ class NucleiCounter:
             toolbar_frame.pack(fill=tk.X)
             toolbar = NavigationToolbar2Tk(self.canvas, toolbar_frame)
             toolbar.update()
+            print("Preview figure created successfully")
 
         # Update the figure
+        print("Updating preview figure")
         self.update_preview_figure(binary, nuclei_mask, result_img, count)
+        print("Preview initialization complete")
 
     def update_preview_figure(self, binary, nuclei_mask, result_img, count):
         """Update the preview figure with the current image and processing results"""
+        print("Starting update_preview_figure...")
         if self.preview_fig is None or self.preview_axs is None:
+            print("Preview figure or axes not initialized")
             return
 
+        print("Clearing axes...")
         # Clear all axes
         for ax in self.preview_axs:
             ax.clear()
@@ -792,6 +847,7 @@ class NucleiCounter:
         # Set tight layout to False to prevent automatic adjustment
         self.preview_fig.set_tight_layout(False)
 
+        print("Displaying original image...")
         # Original image
         if len(self.current_image[0].shape) == 3:
             self.preview_axs[0].imshow(self.current_image[0])
@@ -799,6 +855,7 @@ class NucleiCounter:
             self.preview_axs[0].imshow(self.current_image[0], cmap='gray')
         self.preview_axs[0].set_title("Original Image")
 
+        print("Displaying result image...")
         # Result image with detections
         if len(result_img.shape) == 3:
             # Handle color conversion if needed
@@ -828,14 +885,17 @@ class NucleiCounter:
                               "Click on missed nuclei in the Detection Result panel to mark them manually",
                               ha='center', fontsize=9, bbox=dict(facecolor='white', alpha=0.7))
 
+        print("Adjusting layout...")
         # Use fixed spacing instead of tight_layout
         self.preview_fig.subplots_adjust(
             left=0.05, right=0.95, bottom=0.1, top=0.9,
             wspace=0.2, hspace=0.3
         )
 
+        print("Drawing canvas...")
         # Draw the updated figure
         self.canvas.draw()
+        print("Preview figure update complete")
 
     def update_preview(self):
         """Update the preview with current parameters"""
@@ -865,6 +925,59 @@ class NucleiCounter:
                 # Add to manual nuclei list
                 self.manual_nuclei.append((x, y))
                 print(f"Manual nucleus added at ({x}, {y})")
+
+                # Recalculate nearest nucleus associations for all red dots
+                if self.analyze_nearest_nucleus and self.red_dots:
+                    print("Recalculating nearest nucleus associations...")
+                    # Get all nucleus centroids (both automatic and manual)
+                    nuclei_centroids = []
+                    
+                    # Get automatic nuclei centroids
+                    binary, nuclei_mask, _, _ = self.process_image(self.current_image[0], self.current_image[1])
+                    contours, _ = cv2.findContours(nuclei_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    
+                    for i, contour in enumerate(contours):
+                        M = cv2.moments(contour)
+                        if M["m00"] != 0:
+                            cx = int(M["m10"] / M["m00"])
+                            cy = int(M["m01"] / M["m00"])
+                            nuclei_centroids.append({
+                                'id': i + 1,
+                                'centroid': (cx, cy),
+                                'contour': contour
+                            })
+                    
+                    # Add manual nuclei centroids
+                    for i, (mx, my) in enumerate(self.manual_nuclei):
+                        nuclei_centroids.append({
+                            'id': len(contours) + i + 1,
+                            'centroid': (mx, my),
+                            'contour': None  # Manual nuclei don't have contours
+                        })
+                    
+                    # Recalculate nearest nucleus for each red dot
+                    nucleus_dot_mapping = {}
+                    for dot in self.red_dots:
+                        min_dist = float('inf')
+                        nearest_nucleus = None
+                        
+                        for nucleus in nuclei_centroids:
+                            nx, ny = nucleus['centroid']
+                            dx, dy = dot['centroid']
+                            dist = np.sqrt((dx - nx)**2 + (dy - ny)**2)
+                            if dist < min_dist:
+                                min_dist = dist
+                                nearest_nucleus = nucleus
+                        
+                        if nearest_nucleus:
+                            dot['nearest_nucleus'] = nearest_nucleus['id']
+                            if nearest_nucleus['id'] not in nucleus_dot_mapping:
+                                nucleus_dot_mapping[nearest_nucleus['id']] = []
+                            nucleus_dot_mapping[nearest_nucleus['id']].append(dot)
+                    
+                    # Update the mapping for the current image
+                    self.nucleus_dot_associations[self.current_filename] = nucleus_dot_mapping
+                    print("Nearest nucleus associations updated")
 
                 # Update preview
                 self.update_preview()
@@ -953,11 +1066,29 @@ class NucleiCounter:
             cv2.putText(result_img, str(len(contours) + i + 1), (x, y),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, nuclei_color, 1)
 
+        # After detecting nuclei, store their centroids if analyzing nearest nucleus
+        nuclei_centroids = []
+        if self.analyze_nearest_nucleus:
+            for i, contour in enumerate(contours):
+                M = cv2.moments(contour)
+                if M["m00"] != 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
+                    nuclei_centroids.append({
+                        'id': i + 1,
+                        'centroid': (cx, cy),
+                        'contour': contour
+                    })
+
+            # Add manual nuclei centroids
+            for i, (mx, my) in enumerate(self.manual_nuclei):
+                nuclei_centroids.append({
+                    'id': len(contours) + i + 1,
+                    'centroid': (mx, my),
+                    'contour': None  # Manual nuclei don't have contours
+                })
+
         # Process red channel if the image is RGB
-        red_dots = []
-        green_dots = []
-        total_green_area_microns = 0  # Initialize total green area
-        
         if len(image.shape) == 3 and image.shape[2] >= 3:
             # Extract red channel
             red_channel = image[:, :, 0]  # red channel is index 0 in RGB
@@ -972,102 +1103,68 @@ class NucleiCounter:
             red_labels = measure.label(red_binary)
             red_regions = measure.regionprops(red_labels)
             
-            # Filter red dots by size
-            valid_red_labels = [region.label for region in red_regions
-                             if self.params['red_min_size'] <= region.area <= self.params['red_max_size']]
-            
-            # Create a mask for valid red dots
-            red_mask = np.zeros_like(red_binary)
-            for label in valid_red_labels:
-                red_mask[red_labels == label] = 255
-            
-            # Find contours of red dots
-            red_contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            # Use same line thickness for dots as for nuclei
-            dot_line_thickness = 2  # Using 2px for better visibility
-            
-            # Define colors for the dots
-            red_dot_color = (0, 255, 255)  # Yellow color for red dots in BGR format
-            
-            # Draw contours on result image
-            for i, contour in enumerate(red_contours):
-                # Calculate size in microns
-                area_pixels = cv2.contourArea(contour)
-                area_microns = area_pixels / (self.MICRON_CONVERSION * self.MICRON_CONVERSION)
-                
-                # Store the dot data
-                red_dots.append({
-                    'id': i + 1,
-                    'area_pixels': area_pixels,
-                    'area_microns': area_microns,
-                    'contour': contour
-                })
-                
-                # Draw yellow contour for red dots
-                cv2.drawContours(result_img, [contour], -1, red_dot_color, dot_line_thickness)
-            
-            # Always extract green channel for total area, regardless of analyze_green_dots setting
-            green_channel = image[:, :, 1]  # green channel is index 1 in RGB
-            
-            # Default threshold for green channel if not analyzing green dots
-            green_threshold = self.params.get('green_threshold', 100)
-            
-            # Apply Gaussian blur
-            blurred_green = cv2.GaussianBlur(green_channel, (5, 5), 0)
-            
-            # Apply threshold to get binary image of green areas
-            _, green_binary = cv2.threshold(blurred_green, green_threshold, 255, cv2.THRESH_BINARY)
-            
-            # Calculate total green area in microns (all pixels above threshold)
-            total_green_pixels = np.sum(green_binary > 0)
-            total_green_area_microns = total_green_pixels / (self.MICRON_CONVERSION * self.MICRON_CONVERSION)
-            
-            # Process green dots if requested (individual dots analysis)
-            if self.analyze_green_dots:
-                # Label connected components for individual dots
-                green_labels = measure.label(green_binary)
-                green_regions = measure.regionprops(green_labels)
-                
-                # Filter green dots by size
-                valid_green_labels = [region.label for region in green_regions
-                                 if self.params['green_min_size'] <= region.area <= self.params['green_max_size']]
-                
-                # Create a mask for valid green dots
-                green_mask = np.zeros_like(green_binary)
-                for label in valid_green_labels:
-                    green_mask[green_labels == label] = 255
-                
-                # Find contours of green dots
-                green_contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                
-                # Define magenta color for green dots
-                green_dot_color = (255, 0, 255)  # Magenta color for green dots in BGR format
-                
-                # Draw contours on result image
-                for i, contour in enumerate(green_contours):
-                    # Calculate size in microns
-                    area_pixels = cv2.contourArea(contour)
+            # Filter red dots by size and process each dot
+            self.red_dots = []  # Reset red dots list
+            for region in red_regions:
+                if self.params['red_min_size'] <= region.area <= self.params['red_max_size']:
+                    # Calculate centroid and area
+                    cy, cx = region.centroid
+                    area_pixels = region.area
                     area_microns = area_pixels / (self.MICRON_CONVERSION * self.MICRON_CONVERSION)
                     
-                    # Store the dot data
-                    green_dots.append({
-                        'id': i + 1,
+                    # Calculate average intensity in the original red channel
+                    red_intensity = np.mean(red_channel[region.coords[:, 0], region.coords[:, 1]])
+                    
+                    dot_data = {
+                        'id': len(self.red_dots) + 1,
+                        'centroid': (int(cx), int(cy)),
                         'area_pixels': area_pixels,
                         'area_microns': area_microns,
-                        'contour': contour
-                    })
+                        'intensity': red_intensity,
+                        'coords': region.coords
+                    }
                     
-                    # Draw magenta contour for green dots
-                    cv2.drawContours(result_img, [contour], -1, green_dot_color, dot_line_thickness)
-        
-        # Save detected dots
-        self.red_dots = red_dots
-        if self.analyze_green_dots:
-            self.green_dots = green_dots
-            
-        # Store total green area regardless of analyze_green_dots setting
-        self.total_green_area_microns = total_green_area_microns
+                    # Find nearest nucleus if analyzing nearest nucleus
+                    if self.analyze_nearest_nucleus and nuclei_centroids:
+                        min_dist = float('inf')
+                        nearest_nucleus = None
+                        
+                        for nucleus in nuclei_centroids:
+                            nx, ny = nucleus['centroid']
+                            dist = np.sqrt((cx - nx)**2 + (cy - ny)**2)
+                            if dist < min_dist:
+                                min_dist = dist
+                                nearest_nucleus = nucleus
+                        
+                        if nearest_nucleus:
+                            dot_data['nearest_nucleus'] = nearest_nucleus['id']
+                    
+                    self.red_dots.append(dot_data)
+                    
+                    # Draw red dot on result image
+                    cv2.circle(result_img, (int(cx), int(cy)), 5, (0, 255, 255), -1)  # Yellow color for red dots
+
+            # Update nucleus-dot associations if analyzing nearest nucleus
+            if self.analyze_nearest_nucleus:
+                nucleus_dot_mapping = {}
+                for dot in self.red_dots:
+                    if 'nearest_nucleus' in dot:
+                        nucleus_id = dot['nearest_nucleus']
+                        if nucleus_id not in nucleus_dot_mapping:
+                            nucleus_dot_mapping[nucleus_id] = []
+                        nucleus_dot_mapping[nucleus_id].append(dot)
+                self.nucleus_dot_associations[self.current_filename] = nucleus_dot_mapping
+
+                # Draw lines from nuclei to their associated dots
+                for nucleus_id, dots in nucleus_dot_mapping.items():
+                    # Find the nucleus centroid
+                    nucleus = next((n for n in nuclei_centroids if n['id'] == nucleus_id), None)
+                    if nucleus and dots:
+                        nx, ny = nucleus['centroid']
+                        # Draw lines from nucleus to its associated dots
+                        for dot in dots:
+                            dx, dy = dot['centroid']
+                            cv2.line(result_img, (nx, ny), (dx, dy), (0, 255, 255), 1)  # Yellow lines
 
         return binary, nuclei_mask, result_img, len(contours) + len(self.manual_nuclei)
 
@@ -1084,6 +1181,9 @@ class NucleiCounter:
         output_path = os.path.join(self.output_dir, f"result_{self.current_filename}")
         io.imsave(output_path, result_img)
 
+        # Calculate total red area
+        total_red_area = sum(dot['area_microns'] for dot in self.red_dots)
+
         # Store results for nuclei
         result_entry = {
             'Filename': self.current_filename,
@@ -1091,13 +1191,16 @@ class NucleiCounter:
             'Manual_Nuclei_Count': len(self.manual_nuclei),
             'Total_Nuclei_Count': count,
             'Red_Dot_Count': len(self.red_dots),
-            'Total_Green_Area_Microns': self.total_green_area_microns,  # Always store total green area
+            'Total_Red_Area': total_red_area,  # Add total red area
+            'Red_Dots_Per_Nucleus': len(self.red_dots) / count if count > 0 else 0,  # Add ratio
+            'Total_Green_Area_Microns': self.total_green_area_microns,
             'Has_Custom_Params': self.current_filename in self.image_params
         }
         
         # Add green dot count if applicable
         if self.analyze_green_dots:
             result_entry['Green_Dot_Count'] = len(self.green_dots)
+            result_entry['Green_Dots_Per_Nucleus'] = len(self.green_dots) / count if count > 0 else 0
         
         # Update or add to total results
         existing_entry = next((item for item in self.total_results
@@ -1212,203 +1315,111 @@ class NucleiCounter:
             messagebox.showinfo("No Results", "No images were processed.")
             return
 
-        # Save nuclei results to CSV
-        results_df = pd.DataFrame(self.total_results)
-        csv_path = os.path.join(self.output_dir, "nuclei_counts.csv")
-        results_df.to_csv(csv_path, index=False)
-        
-        # Combine all red dot data into one CSV
-        all_red_dots = []
-        for filename, dots in self.stored_red_dots.items():
-            for dot in dots:
-                all_red_dots.append({
-                    'Filename': filename,
-                    'Color': 'Red',
-                    'Dot_ID': dot['id'],
-                    'Area_Pixels': dot['area_pixels'],
-                    'Area_Microns': dot['area_microns']
-                })
-        
-        # Combine all green dot data into one CSV if applicable
-        all_green_dots = []
-        if self.analyze_green_dots:
-            for filename, dots in self.stored_green_dots.items():
-                for dot in dots:
-                    all_green_dots.append({
-                        'Filename': filename,
-                        'Color': 'Green',
-                        'Dot_ID': dot['id'],
-                        'Area_Pixels': dot['area_pixels'],
-                        'Area_Microns': dot['area_microns']
-                    })
-            
-            # Combine red and green dots for overall analysis
-            all_dots = all_red_dots + all_green_dots
-            if all_dots:
-                dots_df = pd.DataFrame(all_dots)
-                dots_csv_path = os.path.join(self.output_dir, "all_dots.csv")
-                dots_df.to_csv(dots_csv_path, index=False)
-        elif all_red_dots:
-            # Just save red dots if that's all we have
-            red_dots_df = pd.DataFrame(all_red_dots)
-            red_dots_csv_path = os.path.join(self.output_dir, "all_red_dots.csv")
-            red_dots_df.to_csv(red_dots_csv_path, index=False)
-        
-        # Create Excel report with requested format
+        # Create Excel report with additional nucleus-dot association data
         excel_data = []
+        nucleus_data = []  # New list for per-nucleus data
+        
         for result in self.total_results:
             filename = result['Filename']
             blue_nuclei_count = result['Total_Nuclei_Count']
-            red_dot_count = result['Red_Dot_Count']
             
-            # Calculate ratio of red dots to blue nuclei
-            red_ratio = 0
-            if blue_nuclei_count > 0:
-                red_ratio = red_dot_count / blue_nuclei_count
-            
-            # Calculate average size of red dots in microns
-            avg_red_dot_size = 0
-            total_red_area = 0
-            if filename in self.stored_red_dots and len(self.stored_red_dots[filename]) > 0:
-                dots = self.stored_red_dots[filename]
-                total_red_area = sum(dot['area_microns'] for dot in dots)
-                avg_red_dot_size = total_red_area / len(dots)
-            
-            # Calculate total red area to blue nuclei ratio
-            red_area_to_nuclei_ratio = 0
-            if blue_nuclei_count > 0:
-                red_area_to_nuclei_ratio = total_red_area / blue_nuclei_count
-                
-            # Get total green area (always calculated regardless of green dot analysis setting)
-            total_green_area = result.get('Total_Green_Area_Microns', 0)
-            
-            # Calculate total green area to blue nuclei ratio
-            green_area_to_nuclei_ratio = 0
-            if blue_nuclei_count > 0:
-                green_area_to_nuclei_ratio = total_green_area / blue_nuclei_count
-            
-            # Create the base data for this file
+            # Basic file data (existing)
             file_data = {
                 'File Name': filename,
                 'Total Blue Nuclei': blue_nuclei_count,
-                'Total Red Dots': red_dot_count,
-                'Total Red Area (μm²)': total_red_area,
-                'Red Dots / Blue Nuclei Ratio': red_ratio,
-                'Total Red Area / Blue Nuclei (μm²)': red_area_to_nuclei_ratio,
-                'Avg Red Dot Size (μm²)': avg_red_dot_size,
-                'Total Green Area (μm²)': total_green_area,
-                'Total Green Area / Blue Nuclei (μm²)': green_area_to_nuclei_ratio
+                'Total Red Dots': result['Red_Dot_Count'],
+                'Total Red Area (μm²)': result['Total_Red_Area'],
+                'Red Dots / Blue Nuclei Ratio': result['Red_Dots_Per_Nucleus']
             }
             
-            # Add individual green dot data if applicable
-            if self.analyze_green_dots:
-                green_dot_count = result.get('Green_Dot_Count', 0)
+            # Add nearest nucleus analysis data if available
+            if self.analyze_nearest_nucleus and filename in self.nucleus_dot_associations:
+                nucleus_mapping = self.nucleus_dot_associations[filename]
                 
-                # Calculate ratio of green dots to blue nuclei
-                green_ratio = 0
-                if blue_nuclei_count > 0:
-                    green_ratio = green_dot_count / blue_nuclei_count
+                # Calculate statistics for this file
+                nuclei_with_dots = len([n for n in nucleus_mapping.keys() if nucleus_mapping[n]])
+                total_nuclei = blue_nuclei_count
                 
-                # Calculate average size of green dots in microns
-                avg_green_dot_size = 0
-                total_analyzed_green_area = 0
-                if filename in self.stored_green_dots and len(self.stored_green_dots[filename]) > 0:
-                    dots = self.stored_green_dots[filename]
-                    total_analyzed_green_area = sum(dot['area_microns'] for dot in dots)
-                    avg_green_dot_size = total_analyzed_green_area / len(dots)
-                
-                # Add green dot columns
                 file_data.update({
-                    'Total Green Dots': green_dot_count,
-                    'Green Dots / Blue Nuclei Ratio': green_ratio,
-                    'Avg Green Dot Size (μm²)': avg_green_dot_size
+                    'Nuclei With Associated Dots': nuclei_with_dots,
+                    'Percent Nuclei With Dots': (nuclei_with_dots / total_nuclei * 100) if total_nuclei > 0 else 0
                 })
+                
+                # Add individual nucleus data
+                for nucleus_id, dots in nucleus_mapping.items():
+                    if dots:
+                        avg_intensity = np.mean([dot['intensity'] for dot in dots])
+                        nucleus_data.append({
+                            'File Name': filename,
+                            'Nucleus ID': nucleus_id,
+                            'Associated Dots Count': len(dots),
+                            'Average Red Intensity': avg_intensity,
+                            'Total Dot Area (μm²)': sum(dot['area_microns'] for dot in dots)
+                        })
             
             excel_data.append(file_data)
         
-        # Create Excel file
-        if excel_data:
-            excel_df = pd.DataFrame(excel_data)
-            excel_path = os.path.join(self.output_dir, "staining_analysis_report.xlsx")
+        # Save to Excel with multiple sheets
+        excel_path = os.path.join(self.output_dir, "staining_analysis_report.xlsx")
+        with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+            # Main results sheet
+            pd.DataFrame(excel_data).to_excel(writer, sheet_name='Summary Results', index=False)
             
-            # Format the Excel file with proper column widths
-            try:
-                with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
-                    excel_df.to_excel(writer, sheet_name='Analysis Results', index=False)
-                    worksheet = writer.sheets['Analysis Results']
-                    
-                    # Adjust column widths
-                    for i, col in enumerate(excel_df.columns):
-                        # Set the width based on the length of the column name and the maximum length of data
-                        max_length = max(excel_df[col].astype(str).apply(len).max(), len(col)) + 3
-                        # Limit width to a reasonable maximum
-                        max_length = min(max_length, 50)
-                        # Excel measures column width in characters
-                        worksheet.column_dimensions[chr(65 + i)].width = max_length
-                
-                print(f"Excel report saved to {excel_path}")
-            except Exception as e:
-                print(f"Error creating Excel file: {e}")
-                # Fallback to CSV if Excel writing fails
-                excel_csv_path = os.path.join(self.output_dir, "staining_analysis_report.csv")
-                excel_df.to_csv(excel_csv_path, index=False)
-                print(f"Saved as CSV instead: {excel_csv_path}")
+            # Nucleus-specific data sheet if available
+            if nucleus_data:
+                pd.DataFrame(nucleus_data).to_excel(writer, sheet_name='Nucleus Details', index=False)
+            
+            # Format the sheets
+            for sheet in writer.sheets.values():
+                for column in sheet.columns:
+                    max_length = max(len(str(cell.value)) for cell in column)
+                    sheet.column_dimensions[column[0].column_letter].width = min(max_length + 2, 30)
 
-        # Calculate summary statistics
-        total_count = results_df['Total_Nuclei_Count'].sum()
-        auto_count = results_df['Auto_Nuclei_Count'].sum()
-        manual_count = results_df['Manual_Nuclei_Count'].sum()
-        avg_count = results_df['Total_Nuclei_Count'].mean()
-        total_red_dots = results_df['Red_Dot_Count'].sum()
-        avg_red_dots = results_df['Red_Dot_Count'].mean()
-        avg_total_green_area = results_df['Total_Green_Area_Microns'].mean()
+        print(f"Excel report saved to {excel_path}")
         
-        # Green dot statistics if applicable
-        total_green_dots = 0
-        avg_green_dots = 0
-        if self.analyze_green_dots and 'Green_Dot_Count' in results_df.columns:
-            total_green_dots = results_df['Green_Dot_Count'].sum()
-            avg_green_dots = results_df['Green_Dot_Count'].mean()
-        
-        # Calculate average dot sizes
-        overall_avg_red_dot_size = 0
-        overall_avg_green_dot_size = 0
-        
-        if all_red_dots:
-            red_dots_df = pd.DataFrame(all_red_dots)
-            overall_avg_red_dot_size = red_dots_df['Area_Microns'].mean()
-            
-        if self.analyze_green_dots and all_green_dots:
-            green_dots_df = pd.DataFrame(all_green_dots)
-            overall_avg_green_dot_size = green_dots_df['Area_Microns'].mean()
-
-        # Prepare completion message
-        message = (
-            f"All images have been processed.\n\n"
-            f"Total nuclei detected: {total_count}\n"
-            f"- Automatically detected: {auto_count}\n"
-            f"- Manually added: {manual_count}\n"
-            f"Average nuclei per image: {avg_count:.2f}\n\n"
-            f"Total red dots detected: {total_red_dots}\n"
-            f"Average red dots per image: {avg_red_dots:.2f}\n"
-            f"Average red dot size: {overall_avg_red_dot_size:.2f} μm²\n"
-            f"Average total green area per image: {avg_total_green_area:.2f} μm²\n"
-        )
-        
-        if self.analyze_green_dots:
-            message += (
-                f"\nTotal green dots detected: {total_green_dots}\n"
-                f"Average green dots per image: {avg_green_dots:.2f}\n"
-                f"Average green dot size: {overall_avg_green_dot_size:.2f} μm²\n"
-            )
-            
-        message += f"\nResults saved to {self.output_dir}\nExcel report: staining_analysis_report.xlsx"
-        
-        # Show message and schedule application close
+        # Show completion message with additional statistics
+        message = self.create_completion_message(excel_data, nucleus_data)
         messagebox.showinfo("Processing Complete", message)
+        
         print("Processing completed. Closing application.")
         self.root.after(200, self.close_application)
-    
+
+    def create_completion_message(self, excel_data, nucleus_data):
+        """Create a detailed completion message including nearest nucleus analysis results"""
+        message = []
+        
+        # Basic statistics
+        total_nuclei = sum(result['Total Blue Nuclei'] for result in excel_data)
+        total_red_dots = sum(result['Total Red Dots'] for result in excel_data)
+        
+        message.extend([
+            f"All images have been processed.",
+            f"\nBasic Statistics:",
+            f"- Total nuclei detected: {total_nuclei}",
+            f"- Total red dots detected: {total_red_dots}"
+        ])
+        
+        # Nearest nucleus analysis statistics if available
+        if self.analyze_nearest_nucleus and nucleus_data:
+            total_nuclei_with_dots = len(set((d['File Name'], d['Nucleus ID']) for d in nucleus_data))
+            avg_dots_per_nucleus = np.mean([d['Associated Dots Count'] for d in nucleus_data])
+            avg_intensity = np.mean([d['Average Red Intensity'] for d in nucleus_data])
+            
+            message.extend([
+                f"\nNearest Nucleus Analysis:",
+                f"- Nuclei with associated dots: {total_nuclei_with_dots}",
+                f"- Average dots per nucleus: {avg_dots_per_nucleus:.2f}",
+                f"- Average red intensity: {avg_intensity:.2f}"
+            ])
+        
+        # Add file location information
+        message.extend([
+            f"\nResults saved to {self.output_dir}",
+            f"Excel report: staining_analysis_report.xlsx"
+        ])
+        
+        return "\n".join(message)
+
     def close_application(self):
         """Close the application safely"""
         self.root.quit()
