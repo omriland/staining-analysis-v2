@@ -206,7 +206,6 @@ props = measure.regionprops(labeled_skeleton)
 # Initialize lists for analysis
 individuals = []  # Components with no junctions (0 or 1 branch)
 networks = []    # Components with junctions (multiple branches)
-network_branches = []  # Number of branches per network
 
 # Analyze each component
 for prop in props:
@@ -215,94 +214,98 @@ for prop in props:
     region_junctions = junction_pixels[prop.bbox[0]:prop.bbox[2], 
                                     prop.bbox[1]:prop.bbox[3]] & region
     
-    # Count branches in this component
-    n_branches = count_branches(region, region_junctions)
-    
     # Classify based on junctions
     if np.any(region_junctions):
         networks.append(prop)
-        network_branches.append(n_branches)
     else:
         individuals.append(prop)
 
-# Calculate statistics
-n_individuals = len(individuals)
-n_networks = len(networks)
-
-# Network size statistics (number of branches per network)
-if network_branches:
-    mean_network_size = np.mean(network_branches)
-    median_network_size = np.median(network_branches)
-    std_network_size = np.std(network_branches)
-else:
-    mean_network_size = median_network_size = std_network_size = 0
-
-# Branch length statistics (for visualization)
+# Calculate branch statistics using skan
 skeleton_data = csr.Skeleton(skeleton)
-branch_lengths_pixels = skeleton_data.path_lengths()
-branch_lengths_microns = branch_lengths_pixels * MICRONS_PER_PIXEL
+branch_data = pd.DataFrame()
+branch_data['branch_length'] = skeleton_data.path_lengths() * MICRONS_PER_PIXEL  # Convert to microns immediately
+branch_data['network_id'] = -1  # Initialize all branches as unassigned
 
-# --- Generate Excel Report ---
 def get_component_centroid(component):
     """Calculate centroid of a region property component"""
     return np.mean(component.coords, axis=0)
 
-def get_network_stats(network_indices, network_branches, branch_lengths_microns):
-    """Calculate network statistics for a subset of networks"""
-    if len(network_indices) == 0:
+def get_network_stats(network_props, branch_data):
+    """Calculate network statistics for a complete network"""
+    if not network_props:
         return 0, 0, 0  # No networks
     
-    relevant_branches = [network_branches[i] for i in network_indices]
-    relevant_lengths = branch_lengths_microns[network_indices]
+    # Get all branches for these networks
+    network_indices = [networks.index(prop) for prop in network_props]
+    network_branches = branch_data[branch_data['network_id'].isin(network_indices)]
     
-    mean_size = np.mean(relevant_branches) if relevant_branches else 0
-    mean_length = np.mean(relevant_lengths) if len(relevant_lengths) > 0 else 0
+    # Calculate statistics
+    n_networks = len(network_props)
+    mean_size = len(network_branches) / n_networks if n_networks > 0 else 0
+    mean_length = network_branches['branch_length'].mean() if not network_branches.empty else 0
     
-    return len(network_indices), mean_size, mean_length
+    return n_networks, mean_size, mean_length
 
-# Calculate centroids for all components
-network_centroids = np.array([get_component_centroid(net) for net in networks]) if networks else np.empty((0, 2))
-individual_centroids = np.array([get_component_centroid(ind) for ind in individuals]) if individuals else np.empty((0, 2))
+# Assign branches to networks
+for i, network in enumerate(networks):
+    bbox = network.bbox
+    network_mask = np.zeros_like(skeleton, dtype=bool)
+    network_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = network.image
+    
+    # Check each branch
+    for branch_idx in range(len(branch_data)):
+        path = skeleton_data.path_coordinates(branch_idx)
+        path_points = path.astype(int)
+        if np.any(network_mask[path_points[:, 0], path_points[:, 1]]):
+            branch_data.loc[branch_idx, 'network_id'] = i
 
-# Prepare data for Excel
+# Keep track of which networks and individuals are associated with nuclei
+networks_with_nuclei = set()
+individuals_with_nuclei = set()
+
+# Process marked nuclei and generate Excel data
 excel_data = []
-
-# Process marked nuclei
 for nucleus_id, (contour, area) in enumerate(zip(nuclei_contours, nuclei_areas), 1):
     # Calculate nucleus centroid
     M = cv2.moments(contour)
     if M["m00"] != 0:
         nucleus_cx = int(M["m10"] / M["m00"])
         nucleus_cy = int(M["m01"] / M["m00"])
-        nucleus_centroid = np.array([nucleus_cy, nucleus_cx])  # Note: y,x format to match region props
+        nucleus_centroid = np.array([nucleus_cy, nucleus_cx])
         
-        # Find associated networks
-        if len(networks) > 0:
-            network_distances = cdist([nucleus_centroid], network_centroids)
-            associated_networks = np.where(network_distances[0] < 100)[0]  # Within 100 pixels
-        else:
-            associated_networks = np.array([], dtype=int)
-            
-        # Find associated individuals
-        if len(individuals) > 0:
-            individual_distances = cdist([nucleus_centroid], individual_centroids)
-            associated_individuals = np.where(individual_distances[0] < 100)[0]  # Within 100 pixels
-        else:
-            associated_individuals = np.array([], dtype=int)
+        # Find associated networks and individuals
+        associated_networks = []
+        associated_individuals = []
+        max_distance = 100  # pixels
         
-        # Calculate footprint for associated components
+        # Check networks
+        for i, net in enumerate(networks):
+            net_centroid = get_component_centroid(net)
+            distance = np.sqrt(np.sum((nucleus_centroid - net_centroid) ** 2))
+            if distance < max_distance:
+                associated_networks.append(net)
+                networks_with_nuclei.add(i)  # Track this network as associated
+        
+        # Check individuals
+        for i, ind in enumerate(individuals):
+            ind_centroid = get_component_centroid(ind)
+            distance = np.sqrt(np.sum((nucleus_centroid - ind_centroid) ** 2))
+            if distance < max_distance:
+                associated_individuals.append(i)
+                individuals_with_nuclei.add(i)  # Track this individual as associated
+        
+        # Calculate footprint
         footprint = 0
-        for idx in associated_networks:
-            footprint += networks[idx].area
+        for net in associated_networks:
+            footprint += net.area
         for idx in associated_individuals:
             footprint += individuals[idx].area
         footprint_microns = footprint * (MICRONS_PER_PIXEL ** 2)
         
         # Get network statistics
         n_networks, mean_network_size, mean_branch_length = get_network_stats(
-            associated_networks, network_branches, branch_lengths_microns)
+            associated_networks, branch_data)
         
-        # Add row to Excel data
         excel_data.append({
             'Nucleus ID': nucleus_id,
             'Nucleus Area (μm²)': area,
@@ -313,42 +316,29 @@ for nucleus_id, (contour, area) in enumerate(zip(nuclei_contours, nuclei_areas),
             'Mean Branch Length (μm)': mean_branch_length
         })
 
-# Process unassociated networks
-if len(networks) > 0:
-    # Find networks that weren't associated with any nucleus
-    all_associated = set()
-    for row in excel_data:
-        nucleus_centroid = np.array([nucleus_cy, nucleus_cx])
-        associated_networks = np.where(cdist([nucleus_centroid], network_centroids) < 100)[0]
-        all_associated.update(associated_networks)
-    
-    unassociated = set(range(len(networks))) - all_associated
-    
-    # Add unassociated networks to Excel data
-    for net_idx in unassociated:
-        network = networks[net_idx]
-        footprint = network.area * (MICRONS_PER_PIXEL ** 2)
-        _, mean_size, mean_length = get_network_stats(
-            np.array([net_idx]), network_branches, branch_lengths_microns)
-        
-        excel_data.append({
-            'Nucleus ID': None,
-            'Nucleus Area (μm²)': None,
-            'Mitochondrial Footprint (μm²)': footprint,
-            'Individuals': 0,
-            'Networks': 1,
-            'Mean Network Size': mean_size,
-            'Mean Branch Length (μm)': mean_length
-        })
-
 # Create and save Excel file
 df = pd.DataFrame(excel_data)
 excel_path = image_path.rsplit('.', 1)[0] + '_analysis.xlsx'
-df.to_excel(excel_path, index=False)
+
+# Use ExcelWriter with xlsxwriter engine to adjust column widths
+with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
+    df.to_excel(writer, index=False, sheet_name='Analysis')
+    worksheet = writer.sheets['Analysis']
+    
+    # Adjust columns width based on content
+    for idx, col in enumerate(df.columns):
+        # Get maximum length of column content
+        max_length = max(
+            df[col].astype(str).apply(len).max(),  # max length of values
+            len(str(col))  # length of column name
+        )
+        # Add a little extra space
+        worksheet.set_column(idx, idx, max_length + 2)
+
 print(f"\nAnalysis saved to: {excel_path}")
 
 # --- Visualization ---
-fig = plt.figure(figsize=(20, 10))  # Made figure wider to accommodate new subplot
+fig = plt.figure(figsize=(20, 10))
 
 # Original with overlay
 ax1 = plt.subplot(241)
@@ -363,11 +353,34 @@ ax2.imshow(binary, cmap='gray')
 ax2.set_title("Binary")
 ax2.axis('off')
 
-# Skeleton with junctions
+# Skeleton with junctions and nucleus-associated components
 ax3 = plt.subplot(243)
-ax3.imshow(skeleton, cmap='gray')
-ax3.imshow(junction_pixels, cmap='Reds', alpha=0.7)
-ax3.set_title("Skeleton + Junctions")
+# Create a colored skeleton image
+skeleton_rgb = np.zeros((*skeleton.shape, 3))
+# Add non-associated components in gray
+skeleton_rgb[skeleton] = [0.5, 0.5, 0.5]  # Gray for unassociated components
+
+# Add associated networks in green
+for i, network in enumerate(networks):
+    if i in networks_with_nuclei:
+        bbox = network.bbox
+        network_mask = np.zeros_like(skeleton, dtype=bool)
+        network_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = network.image
+        skeleton_rgb[network_mask & skeleton] = [0, 1, 0]  # Green for nucleus-associated networks
+
+# Add associated individuals in blue
+for i, individual in enumerate(individuals):
+    if i in individuals_with_nuclei:
+        bbox = individual.bbox
+        individual_mask = np.zeros_like(skeleton, dtype=bool)
+        individual_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = individual.image
+        skeleton_rgb[individual_mask & skeleton] = [0, 0, 1]  # Blue for nucleus-associated individuals
+
+# Add junction points in red
+skeleton_rgb[junction_pixels] = [1, 0, 0]  # Red for junctions
+
+ax3.imshow(skeleton_rgb)
+ax3.set_title("Skeleton + Junctions\n(Green = Networks, Blue = Individuals\nAssociated with Nuclei)")
 ax3.axis('off')
 
 # Simple Skeleton (Black on White)
@@ -391,17 +404,17 @@ for individual in individuals:
 ax5.imshow(original_img, cmap='gray', alpha=0.5)
 ax5.imshow(network_mask, cmap='Reds', alpha=0.5)
 ax5.imshow(individual_mask, cmap='Blues', alpha=0.5)
-ax5.set_title(f"Networks ({n_networks}) and\nIndividuals ({n_individuals})")
+ax5.set_title(f"Networks ({len(networks)}) and\nIndividuals ({len(individuals)})")
 ax5.axis('off')
 
 # Network size distribution
 ax6 = plt.subplot(246)
-if network_branches:
-    counts, bins, _ = ax6.hist(network_branches, bins='auto',
+if len(networks) > 0:
+    counts, bins, _ = ax6.hist([len(network.coords) for network in networks], bins='auto',
                               color='lightcoral', alpha=0.7, edgecolor='black')
-    ax6.axvline(mean_network_size, color='black', linestyle='--',
-                label=f'Mean: {mean_network_size:.1f}')
-    ax6.set_title("Network Size Distribution\n(Branches per Network)")
+    ax6.axvline(np.mean([len(network.coords) for network in networks]), color='black', linestyle='--',
+                label=f'Mean: {np.mean([len(network.coords) for network in networks]):.1f}')
+    ax6.set_title("Network Size Distribution\n(Number of Branches per Network)")
     ax6.set_xlabel("Number of Branches")
     ax6.set_ylabel("Frequency")
     ax6.legend()
@@ -412,8 +425,8 @@ ax6.axis('on')
 
 # Branch length distribution
 ax7 = plt.subplot(247)
-if len(branch_lengths_microns) > 0:
-    counts, bins, _ = ax7.hist(branch_lengths_microns, bins='auto',
+if len(branch_data['branch_length']) > 0:
+    counts, bins, _ = ax7.hist(branch_data['branch_length'], bins='auto',
                               color='lightgreen', alpha=0.7, edgecolor='black')
     ax7.set_title("Branch Length Distribution")
     ax7.set_xlabel("Length (μm)")
@@ -463,12 +476,13 @@ print(f"1. Mitochondrial footprint:")
 print(f"   - Area (pixels²): {footprint_area_pixels:.2f}")
 print(f"   - Area (μm²): {footprint_area_microns:.2f}")
 print(f"   - Percent of image: {footprint_percent:.2f}%")
-print(f"2. Number of individuals (puncta and rods): {n_individuals}")
-print(f"3. Number of networks: {n_networks}")
+print(f"2. Number of individuals (puncta and rods): {len(individuals)}")
+print(f"3. Number of networks: {len(networks)}")
 print("\nNetwork Size Statistics:")
-print(f"4. Mean branches per network: {mean_network_size:.2f}")
-print(f"5. Median branches per network: {median_network_size:.2f}")
-print(f"6. Network size standard deviation: {std_network_size:.2f}")
+if len(networks) > 0:
+    print(f"4. Mean branches per network: {np.mean([len(network.coords) for network in networks]):.2f}")
+    print(f"5. Median branches per network: {np.median([len(network.coords) for network in networks]):.2f}")
+    print(f"6. Network size standard deviation: {np.std([len(network.coords) for network in networks]):.2f}")
 print("\nNuclei Statistics:")
 if nuclei_areas:
     print(f"7. Number of nuclei: {len(nuclei_areas)}")
