@@ -9,6 +9,8 @@ from matplotlib.colors import ListedColormap
 import random
 from scipy import ndimage
 from skimage.segmentation import watershed
+import pandas as pd
+from scipy.spatial.distance import cdist
 
 # --- Constants ---
 PIXELS_PER_MICRON = 5.7273  # Conversion factor: 1 micron = 5.7273 pixels
@@ -154,6 +156,13 @@ print("Click points to draw outline, press Enter to complete each nucleus, Escap
 nuclei_contours = mark_nuclei(img, original_img)
 print(f"Marked {len(nuclei_contours)} nuclei")
 
+# Calculate nuclei areas right after getting contours
+nuclei_areas = []
+for contour in nuclei_contours:
+    area_pixels = cv2.contourArea(contour)
+    area_microns = area_pixels * (MICRONS_PER_PIXEL ** 2)
+    nuclei_areas.append(area_microns)
+
 # Create nuclei mask from contours
 nuclei_mask = np.zeros_like(img, dtype=np.uint8)
 cv2.drawContours(nuclei_mask, nuclei_contours, -1, 255, -1)  # -1 fills the contours
@@ -233,6 +242,111 @@ skeleton_data = csr.Skeleton(skeleton)
 branch_lengths_pixels = skeleton_data.path_lengths()
 branch_lengths_microns = branch_lengths_pixels * MICRONS_PER_PIXEL
 
+# --- Generate Excel Report ---
+def get_component_centroid(component):
+    """Calculate centroid of a region property component"""
+    return np.mean(component.coords, axis=0)
+
+def get_network_stats(network_indices, network_branches, branch_lengths_microns):
+    """Calculate network statistics for a subset of networks"""
+    if len(network_indices) == 0:
+        return 0, 0, 0  # No networks
+    
+    relevant_branches = [network_branches[i] for i in network_indices]
+    relevant_lengths = branch_lengths_microns[network_indices]
+    
+    mean_size = np.mean(relevant_branches) if relevant_branches else 0
+    mean_length = np.mean(relevant_lengths) if len(relevant_lengths) > 0 else 0
+    
+    return len(network_indices), mean_size, mean_length
+
+# Calculate centroids for all components
+network_centroids = np.array([get_component_centroid(net) for net in networks]) if networks else np.empty((0, 2))
+individual_centroids = np.array([get_component_centroid(ind) for ind in individuals]) if individuals else np.empty((0, 2))
+
+# Prepare data for Excel
+excel_data = []
+
+# Process marked nuclei
+for nucleus_id, (contour, area) in enumerate(zip(nuclei_contours, nuclei_areas), 1):
+    # Calculate nucleus centroid
+    M = cv2.moments(contour)
+    if M["m00"] != 0:
+        nucleus_cx = int(M["m10"] / M["m00"])
+        nucleus_cy = int(M["m01"] / M["m00"])
+        nucleus_centroid = np.array([nucleus_cy, nucleus_cx])  # Note: y,x format to match region props
+        
+        # Find associated networks
+        if len(networks) > 0:
+            network_distances = cdist([nucleus_centroid], network_centroids)
+            associated_networks = np.where(network_distances[0] < 100)[0]  # Within 100 pixels
+        else:
+            associated_networks = np.array([], dtype=int)
+            
+        # Find associated individuals
+        if len(individuals) > 0:
+            individual_distances = cdist([nucleus_centroid], individual_centroids)
+            associated_individuals = np.where(individual_distances[0] < 100)[0]  # Within 100 pixels
+        else:
+            associated_individuals = np.array([], dtype=int)
+        
+        # Calculate footprint for associated components
+        footprint = 0
+        for idx in associated_networks:
+            footprint += networks[idx].area
+        for idx in associated_individuals:
+            footprint += individuals[idx].area
+        footprint_microns = footprint * (MICRONS_PER_PIXEL ** 2)
+        
+        # Get network statistics
+        n_networks, mean_network_size, mean_branch_length = get_network_stats(
+            associated_networks, network_branches, branch_lengths_microns)
+        
+        # Add row to Excel data
+        excel_data.append({
+            'Nucleus ID': nucleus_id,
+            'Nucleus Area (μm²)': area,
+            'Mitochondrial Footprint (μm²)': footprint_microns,
+            'Individuals': len(associated_individuals),
+            'Networks': n_networks,
+            'Mean Network Size': mean_network_size,
+            'Mean Branch Length (μm)': mean_branch_length
+        })
+
+# Process unassociated networks
+if len(networks) > 0:
+    # Find networks that weren't associated with any nucleus
+    all_associated = set()
+    for row in excel_data:
+        nucleus_centroid = np.array([nucleus_cy, nucleus_cx])
+        associated_networks = np.where(cdist([nucleus_centroid], network_centroids) < 100)[0]
+        all_associated.update(associated_networks)
+    
+    unassociated = set(range(len(networks))) - all_associated
+    
+    # Add unassociated networks to Excel data
+    for net_idx in unassociated:
+        network = networks[net_idx]
+        footprint = network.area * (MICRONS_PER_PIXEL ** 2)
+        _, mean_size, mean_length = get_network_stats(
+            np.array([net_idx]), network_branches, branch_lengths_microns)
+        
+        excel_data.append({
+            'Nucleus ID': None,
+            'Nucleus Area (μm²)': None,
+            'Mitochondrial Footprint (μm²)': footprint,
+            'Individuals': 0,
+            'Networks': 1,
+            'Mean Network Size': mean_size,
+            'Mean Branch Length (μm)': mean_length
+        })
+
+# Create and save Excel file
+df = pd.DataFrame(excel_data)
+excel_path = image_path.rsplit('.', 1)[0] + '_analysis.xlsx'
+df.to_excel(excel_path, index=False)
+print(f"\nAnalysis saved to: {excel_path}")
+
 # --- Visualization ---
 fig = plt.figure(figsize=(20, 10))  # Made figure wider to accommodate new subplot
 
@@ -311,7 +425,6 @@ ax7.axis('on')
 
 # Nuclei Areas
 ax8 = plt.subplot(248)
-nuclei_areas = []
 nuclei_centroids = []
 
 # Get areas from contours
