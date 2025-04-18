@@ -71,36 +71,6 @@ footprint_percent = 100 * footprint_area_pixels / binary.size
 skeleton = skeletonize(binary)
 
 # --- Manual Nuclei Marking ---
-def is_self_intersecting(contour):
-    """Check if a polygon intersects itself by checking if any non-adjacent line segments intersect"""
-    if len(contour) < 4:  # Need at least 4 points to have an intersection
-        return False
-    
-    # Close the polygon
-    polygon = contour.copy()
-    if not np.array_equal(polygon[0], polygon[-1]):
-        polygon = np.vstack([polygon, polygon[0]])
-    
-    # Check each pair of non-adjacent line segments
-    for i in range(len(polygon) - 1):
-        for j in range(i + 2, len(polygon) - 1):
-            # Skip if segments share an endpoint
-            if (i == 0 and j == len(polygon) - 2) or (j == i + 2 and len(polygon) <= 4):
-                continue
-                
-            # Check if segments intersect
-            p1, p2 = polygon[i], polygon[i+1]
-            p3, p4 = polygon[j], polygon[j+1]
-            
-            # Simple line segment intersection test
-            def ccw(a, b, c):
-                return (c[1] - a[1]) * (b[0] - a[0]) > (b[1] - a[1]) * (c[0] - a[0])
-            
-            if ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4):
-                return True
-    
-    return False
-
 def mark_nuclei(image, original_colored):
     """Allow user to draw polygons around nuclei and return their contours"""
     nuclei_contours = []
@@ -123,33 +93,13 @@ def mark_nuclei(image, original_colored):
         nonlocal current_contour
         if event.key == 'enter':  # Finish current nucleus
             if len(current_contour) > 2:  # Need at least 3 points for a polygon
-                contour_array = np.array(current_contour, dtype=np.int32)
-                
-                # Check if polygon is self-intersecting
-                if is_self_intersecting(contour_array):
-                    print("Warning: Self-intersecting polygon detected. Please redraw.")
-                    # Reset current_contour and redraw
-                    current_contour = []
-                    ax.cla()  # Clear axis
-                    ax.imshow(original_colored)  # Redraw original colored image
-                    # Redraw all completed nuclei
-                    for i, contour in enumerate(nuclei_contours, 1):
-                        ax.plot(contour[:, 0], contour[:, 1], 'y-', linewidth=1)
-                        center_x = np.mean(contour[:, 0])
-                        center_y = np.mean(contour[:, 1])
-                        ax.text(center_x, center_y, str(i), 
-                               color='yellow', fontsize=10, ha='center', va='center',
-                               bbox=dict(facecolor='black', alpha=0.5, pad=1))
-                    plt.draw()
-                    return
-                
                 # Close the polygon
                 first_point = current_contour[0]
                 last_point = current_contour[-1]
                 event.inaxes.plot([last_point[0], first_point[0]], 
                                 [last_point[1], first_point[1]], 'y-', linewidth=1)
-                # Add to nuclei_contours
-                nuclei_contours.append(contour_array)
+                # Convert to numpy array and add to nuclei_contours
+                nuclei_contours.append(np.array(current_contour, dtype=np.int32))
                 # Add nucleus number
                 center_x = np.mean([p[0] for p in current_contour])
                 center_y = np.mean([p[1] for p in current_contour])
@@ -206,7 +156,7 @@ print("Click points to draw outline, press Enter to complete each nucleus, Escap
 nuclei_contours = mark_nuclei(img, original_img)
 print(f"Marked {len(nuclei_contours)} nuclei")
 
-# Calculate nuclei areas only once, right after getting contours
+# Calculate nuclei areas right after getting contours
 nuclei_areas = []
 nuclei_centroids = []
 for contour in nuclei_contours:
@@ -235,13 +185,40 @@ from scipy.ndimage import convolve
 
 def find_junctions(skel):
     """Returns coordinates of junction pixels (pixels with more than 2 neighbors)"""
-    # More robust junction detection
-    # Use a lower threshold to catch more potential junctions
     kernel = np.array([[1, 1, 1],
                       [1, 10, 1],
                       [1, 1, 1]])
     neighbor_count = convolve(skel.astype(np.uint8), kernel, mode='constant', cval=0)
-    return (neighbor_count > 11) & skel  # More than 1 neighbor (excluding center)
+    return (neighbor_count > 12) & skel  # More than 2 neighbors (excluding center)
+
+def find_junction_centers(junction_pixels):
+    """
+    Thin the junction pixels to get only central points.
+    This is purely for visualization purposes.
+    """
+    if not np.any(junction_pixels):
+        return np.zeros_like(junction_pixels)
+        
+    # Label each junction region
+    labeled_junctions = measure.label(junction_pixels)
+    junction_centers = np.zeros_like(junction_pixels)
+    
+    # For each labeled region, find its center
+    for region_id in range(1, labeled_junctions.max() + 1):
+        region = labeled_junctions == region_id
+        # Get coordinates of all pixels in this junction region
+        coords = np.argwhere(region)
+        if len(coords) > 0:
+            # Calculate the centroid
+            center = np.round(np.mean(coords, axis=0)).astype(int)
+            # Add a single pixel at the center
+            try:
+                junction_centers[center[0], center[1]] = True
+            except IndexError:
+                # Fallback in case we get an out-of-bounds center
+                junction_centers[coords[0][0], coords[0][1]] = True
+                
+    return junction_centers
 
 def count_branches(skel, junctions):
     """Count number of branches in a skeleton component"""
@@ -326,9 +303,6 @@ for i, network in enumerate(networks):
 networks_with_nuclei = set()
 individuals_with_nuclei = set()
 
-# Create a mask of dilated nuclei for proximity detection
-dilated_nuclei_mask = cv2.dilate(nuclei_mask, np.ones((15, 15), np.uint8))
-
 # Process marked nuclei and generate Excel data
 excel_data = []
 for nucleus_id, (contour, area, centroid) in enumerate(zip(nuclei_contours, nuclei_areas, nuclei_centroids), 1):
@@ -339,39 +313,21 @@ for nucleus_id, (contour, area, centroid) in enumerate(zip(nuclei_contours, nucl
     # Find associated networks and individuals
     associated_networks = []
     associated_individuals = []
-    max_distance = 150  # increased from 100 for better detection
+    max_distance = 120  # Slightly increased from 100 for better detection
     
-    # Check networks using both distance and overlap methods
+    # Check networks
     for i, net in enumerate(networks):
-        # Method 1: Centroid distance
         net_centroid = get_component_centroid(net)
         distance = np.sqrt(np.sum((nucleus_centroid - net_centroid) ** 2))
-        
-        # Method 2: Check for overlap with dilated nucleus mask
-        network_mask = np.zeros_like(skeleton, dtype=bool)
-        bbox = net.bbox
-        network_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = net.image
-        has_overlap = np.any(network_mask & dilated_nuclei_mask.astype(bool))
-        
-        # Associate if either method indicates proximity
-        if distance < max_distance or has_overlap:
+        if distance < max_distance:
             associated_networks.append(net)
             networks_with_nuclei.add(i)  # Track this network as associated
     
-    # Check individuals using both distance and overlap methods
+    # Check individuals
     for i, ind in enumerate(individuals):
-        # Method 1: Centroid distance
         ind_centroid = get_component_centroid(ind)
         distance = np.sqrt(np.sum((nucleus_centroid - ind_centroid) ** 2))
-        
-        # Method 2: Check for overlap with dilated nucleus mask
-        individual_mask = np.zeros_like(skeleton, dtype=bool)
-        bbox = ind.bbox
-        individual_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = ind.image
-        has_overlap = np.any(individual_mask & dilated_nuclei_mask.astype(bool))
-        
-        # Associate if either method indicates proximity
-        if distance < max_distance or has_overlap:
+        if distance < max_distance:
             associated_individuals.append(i)
             individuals_with_nuclei.add(i)  # Track this individual as associated
     
@@ -421,17 +377,6 @@ print(f"\nAnalysis saved to: {excel_path}")
 # --- Visualization ---
 fig = plt.figure(figsize=(20, 10))
 
-# Visualize the dilated nuclei mask for debugging
-dilated_nuclei_debug = np.zeros((*original_img.shape[:2], 3))
-dilated_nuclei_debug[:,:,0] = dilated_nuclei_mask / 255.0  # Red channel
-overlay_img = original_img.copy()
-overlay_img = overlay_img.astype(np.float32) / 255.0
-# Blend the dilated mask with the original image
-for c in range(3):
-    overlay_img[:,:,c] = np.where(dilated_nuclei_mask > 0, 
-                                 0.7 * overlay_img[:,:,c] + 0.3 * dilated_nuclei_debug[:,:,0],
-                                 overlay_img[:,:,c])
-
 # Original with overlay
 ax1 = plt.subplot(241)
 ax1.imshow(original_img)
@@ -445,6 +390,9 @@ ax2.imshow(binary, cmap='gray')
 ax2.set_title("Binary")
 ax2.axis('off')
 
+# Get just junction centers for visualization
+junction_centers = find_junction_centers(junction_pixels)
+
 # Skeleton with junctions and nucleus-associated components
 ax3 = plt.subplot(243)
 # Create a colored skeleton image
@@ -452,7 +400,7 @@ skeleton_rgb = np.zeros((*skeleton.shape, 3))
 # Add non-associated components in gray
 skeleton_rgb[skeleton] = [0.5, 0.5, 0.5]  # Gray for unassociated components
 
-# Add associated networks in green
+# Add associated networks in green - FIRST (so they show under junctions)
 for i, network in enumerate(networks):
     if i in networks_with_nuclei:
         bbox = network.bbox
@@ -468,8 +416,8 @@ for i, individual in enumerate(individuals):
         individual_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = individual.image
         skeleton_rgb[individual_mask & skeleton] = [0, 0, 1]  # Blue for nucleus-associated individuals
 
-# Add junction points in red
-skeleton_rgb[junction_pixels] = [1, 0, 0]  # Red for junctions
+# Add junction points in red - using only junction centers (smaller dots)
+skeleton_rgb[junction_centers] = [1, 0, 0]  # Red for junction centers only
 
 ax3.imshow(skeleton_rgb)
 ax3.set_title("Skeleton + Junctions\n(Green = Networks, Blue = Individuals\nAssociated with Nuclei)")
