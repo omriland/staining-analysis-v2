@@ -235,11 +235,13 @@ from scipy.ndimage import convolve
 
 def find_junctions(skel):
     """Returns coordinates of junction pixels (pixels with more than 2 neighbors)"""
+    # More robust junction detection
+    # Use a lower threshold to catch more potential junctions
     kernel = np.array([[1, 1, 1],
                       [1, 10, 1],
                       [1, 1, 1]])
     neighbor_count = convolve(skel.astype(np.uint8), kernel, mode='constant', cval=0)
-    return (neighbor_count > 12) & skel  # More than 2 neighbors (excluding center)
+    return (neighbor_count > 11) & skel  # More than 1 neighbor (excluding center)
 
 def count_branches(skel, junctions):
     """Count number of branches in a skeleton component"""
@@ -324,6 +326,9 @@ for i, network in enumerate(networks):
 networks_with_nuclei = set()
 individuals_with_nuclei = set()
 
+# Create a mask of dilated nuclei for proximity detection
+dilated_nuclei_mask = cv2.dilate(nuclei_mask, np.ones((15, 15), np.uint8))
+
 # Process marked nuclei and generate Excel data
 excel_data = []
 for nucleus_id, (contour, area, centroid) in enumerate(zip(nuclei_contours, nuclei_areas, nuclei_centroids), 1):
@@ -334,21 +339,39 @@ for nucleus_id, (contour, area, centroid) in enumerate(zip(nuclei_contours, nucl
     # Find associated networks and individuals
     associated_networks = []
     associated_individuals = []
-    max_distance = 100  # pixels
+    max_distance = 150  # increased from 100 for better detection
     
-    # Check networks
+    # Check networks using both distance and overlap methods
     for i, net in enumerate(networks):
+        # Method 1: Centroid distance
         net_centroid = get_component_centroid(net)
         distance = np.sqrt(np.sum((nucleus_centroid - net_centroid) ** 2))
-        if distance < max_distance:
+        
+        # Method 2: Check for overlap with dilated nucleus mask
+        network_mask = np.zeros_like(skeleton, dtype=bool)
+        bbox = net.bbox
+        network_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = net.image
+        has_overlap = np.any(network_mask & dilated_nuclei_mask.astype(bool))
+        
+        # Associate if either method indicates proximity
+        if distance < max_distance or has_overlap:
             associated_networks.append(net)
             networks_with_nuclei.add(i)  # Track this network as associated
     
-    # Check individuals
+    # Check individuals using both distance and overlap methods
     for i, ind in enumerate(individuals):
+        # Method 1: Centroid distance
         ind_centroid = get_component_centroid(ind)
         distance = np.sqrt(np.sum((nucleus_centroid - ind_centroid) ** 2))
-        if distance < max_distance:
+        
+        # Method 2: Check for overlap with dilated nucleus mask
+        individual_mask = np.zeros_like(skeleton, dtype=bool)
+        bbox = ind.bbox
+        individual_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = ind.image
+        has_overlap = np.any(individual_mask & dilated_nuclei_mask.astype(bool))
+        
+        # Associate if either method indicates proximity
+        if distance < max_distance or has_overlap:
             associated_individuals.append(i)
             individuals_with_nuclei.add(i)  # Track this individual as associated
     
@@ -397,6 +420,17 @@ print(f"\nAnalysis saved to: {excel_path}")
 
 # --- Visualization ---
 fig = plt.figure(figsize=(20, 10))
+
+# Visualize the dilated nuclei mask for debugging
+dilated_nuclei_debug = np.zeros((*original_img.shape[:2], 3))
+dilated_nuclei_debug[:,:,0] = dilated_nuclei_mask / 255.0  # Red channel
+overlay_img = original_img.copy()
+overlay_img = overlay_img.astype(np.float32) / 255.0
+# Blend the dilated mask with the original image
+for c in range(3):
+    overlay_img[:,:,c] = np.where(dilated_nuclei_mask > 0, 
+                                 0.7 * overlay_img[:,:,c] + 0.3 * dilated_nuclei_debug[:,:,0],
+                                 overlay_img[:,:,c])
 
 # Original with overlay
 ax1 = plt.subplot(241)
@@ -527,13 +561,19 @@ print(f"   - Area (μm²): {footprint_area_microns:.2f}")
 print(f"   - Percent of image: {footprint_percent:.2f}%")
 print(f"2. Number of individuals (puncta and rods): {len(individuals)}")
 print(f"3. Number of networks: {len(networks)}")
+
+# Add detection statistics
+print("\nAssociation Statistics:")
+print(f"4. Networks associated with nuclei: {len(networks_with_nuclei)} of {len(networks)}")
+print(f"5. Individuals associated with nuclei: {len(individuals_with_nuclei)} of {len(individuals)}")
+
 print("\nNetwork Size Statistics:")
 if len(networks) > 0:
-    print(f"4. Mean branches per network: {np.mean([len(network.coords) for network in networks]):.2f}")
-    print(f"5. Median branches per network: {np.median([len(network.coords) for network in networks]):.2f}")
-    print(f"6. Network size standard deviation: {np.std([len(network.coords) for network in networks]):.2f}")
+    print(f"6. Mean branches per network: {np.mean([len(network.coords) for network in networks]):.2f}")
+    print(f"7. Median branches per network: {np.median([len(network.coords) for network in networks]):.2f}")
+    print(f"8. Network size standard deviation: {np.std([len(network.coords) for network in networks]):.2f}")
 print("\nNuclei Statistics:")
 if nuclei_areas:
-    print(f"7. Number of nuclei: {len(nuclei_areas)}")
-    print(f"8. Average nucleus area: {np.mean(nuclei_areas):.2f} μm²")
-    print(f"9. Total nuclei area: {np.sum(nuclei_areas):.2f} μm²")
+    print(f"9. Number of nuclei: {len(nuclei_areas)}")
+    print(f"10. Average nucleus area: {np.mean(nuclei_areas):.2f} μm²")
+    print(f"11. Total nuclei area: {np.sum(nuclei_areas):.2f} μm²")
