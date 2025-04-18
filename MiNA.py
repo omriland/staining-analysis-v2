@@ -337,6 +337,11 @@ with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
 
 print(f"\nAnalysis saved to: {excel_path}")
 
+# Save the figure
+figure_path = image_path.rsplit('.', 1)[0] + '_figure.png'
+plt.savefig(figure_path, dpi=300, bbox_inches='tight')
+print(f"Figure saved to: {figure_path}")
+
 # --- Visualization ---
 fig = plt.figure(figsize=(20, 10))
 
