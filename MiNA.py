@@ -337,11 +337,6 @@ with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
 
 print(f"\nAnalysis saved to: {excel_path}")
 
-# Save the figure
-figure_path = image_path.rsplit('.', 1)[0] + '_figure.png'
-plt.savefig(figure_path, dpi=300, bbox_inches='tight')
-print(f"Figure saved to: {figure_path}")
-
 # --- Visualization ---
 fig = plt.figure(figsize=(20, 10))
 
@@ -472,6 +467,13 @@ ax8.set_title("Nuclei Areas")
 ax8.axis('off')
 
 plt.tight_layout()
+
+# Save the figure before showing it
+figure_path = image_path.rsplit('.', 1)[0] + '_figure.tiff'
+plt.savefig(figure_path, dpi=300, bbox_inches='tight', format='tiff')
+print(f"Figure saved to: {figure_path}")
+
+# Show the figure
 plt.show()
 
 # Print results
