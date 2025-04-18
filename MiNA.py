@@ -71,6 +71,36 @@ footprint_percent = 100 * footprint_area_pixels / binary.size
 skeleton = skeletonize(binary)
 
 # --- Manual Nuclei Marking ---
+def is_self_intersecting(contour):
+    """Check if a polygon intersects itself by checking if any non-adjacent line segments intersect"""
+    if len(contour) < 4:  # Need at least 4 points to have an intersection
+        return False
+    
+    # Close the polygon
+    polygon = contour.copy()
+    if not np.array_equal(polygon[0], polygon[-1]):
+        polygon = np.vstack([polygon, polygon[0]])
+    
+    # Check each pair of non-adjacent line segments
+    for i in range(len(polygon) - 1):
+        for j in range(i + 2, len(polygon) - 1):
+            # Skip if segments share an endpoint
+            if (i == 0 and j == len(polygon) - 2) or (j == i + 2 and len(polygon) <= 4):
+                continue
+                
+            # Check if segments intersect
+            p1, p2 = polygon[i], polygon[i+1]
+            p3, p4 = polygon[j], polygon[j+1]
+            
+            # Simple line segment intersection test
+            def ccw(a, b, c):
+                return (c[1] - a[1]) * (b[0] - a[0]) > (b[1] - a[1]) * (c[0] - a[0])
+            
+            if ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4):
+                return True
+    
+    return False
+
 def mark_nuclei(image, original_colored):
     """Allow user to draw polygons around nuclei and return their contours"""
     nuclei_contours = []
@@ -93,13 +123,33 @@ def mark_nuclei(image, original_colored):
         nonlocal current_contour
         if event.key == 'enter':  # Finish current nucleus
             if len(current_contour) > 2:  # Need at least 3 points for a polygon
+                contour_array = np.array(current_contour, dtype=np.int32)
+                
+                # Check if polygon is self-intersecting
+                if is_self_intersecting(contour_array):
+                    print("Warning: Self-intersecting polygon detected. Please redraw.")
+                    # Reset current_contour and redraw
+                    current_contour = []
+                    ax.cla()  # Clear axis
+                    ax.imshow(original_colored)  # Redraw original colored image
+                    # Redraw all completed nuclei
+                    for i, contour in enumerate(nuclei_contours, 1):
+                        ax.plot(contour[:, 0], contour[:, 1], 'y-', linewidth=1)
+                        center_x = np.mean(contour[:, 0])
+                        center_y = np.mean(contour[:, 1])
+                        ax.text(center_x, center_y, str(i), 
+                               color='yellow', fontsize=10, ha='center', va='center',
+                               bbox=dict(facecolor='black', alpha=0.5, pad=1))
+                    plt.draw()
+                    return
+                
                 # Close the polygon
                 first_point = current_contour[0]
                 last_point = current_contour[-1]
                 event.inaxes.plot([last_point[0], first_point[0]], 
                                 [last_point[1], first_point[1]], 'y-', linewidth=1)
-                # Convert to numpy array and add to nuclei_contours
-                nuclei_contours.append(np.array(current_contour, dtype=np.int32))
+                # Add to nuclei_contours
+                nuclei_contours.append(contour_array)
                 # Add nucleus number
                 center_x = np.mean([p[0] for p in current_contour])
                 center_y = np.mean([p[1] for p in current_contour])
@@ -156,12 +206,23 @@ print("Click points to draw outline, press Enter to complete each nucleus, Escap
 nuclei_contours = mark_nuclei(img, original_img)
 print(f"Marked {len(nuclei_contours)} nuclei")
 
-# Calculate nuclei areas right after getting contours
+# Calculate nuclei areas only once, right after getting contours
 nuclei_areas = []
+nuclei_centroids = []
 for contour in nuclei_contours:
+    # Calculate area
     area_pixels = cv2.contourArea(contour)
     area_microns = area_pixels * (MICRONS_PER_PIXEL ** 2)
     nuclei_areas.append(area_microns)
+    
+    # Calculate centroid
+    M = cv2.moments(contour)
+    if M["m00"] != 0:
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
+        nuclei_centroids.append((cx, cy))
+    else:
+        nuclei_centroids.append((0, 0))  # Fallback
 
 # Create nuclei mask from contours
 nuclei_mask = np.zeros_like(img, dtype=np.uint8)
@@ -265,56 +326,53 @@ individuals_with_nuclei = set()
 
 # Process marked nuclei and generate Excel data
 excel_data = []
-for nucleus_id, (contour, area) in enumerate(zip(nuclei_contours, nuclei_areas), 1):
-    # Calculate nucleus centroid
-    M = cv2.moments(contour)
-    if M["m00"] != 0:
-        nucleus_cx = int(M["m10"] / M["m00"])
-        nucleus_cy = int(M["m01"] / M["m00"])
-        nucleus_centroid = np.array([nucleus_cy, nucleus_cx])
-        
-        # Find associated networks and individuals
-        associated_networks = []
-        associated_individuals = []
-        max_distance = 100  # pixels
-        
-        # Check networks
-        for i, net in enumerate(networks):
-            net_centroid = get_component_centroid(net)
-            distance = np.sqrt(np.sum((nucleus_centroid - net_centroid) ** 2))
-            if distance < max_distance:
-                associated_networks.append(net)
-                networks_with_nuclei.add(i)  # Track this network as associated
-        
-        # Check individuals
-        for i, ind in enumerate(individuals):
-            ind_centroid = get_component_centroid(ind)
-            distance = np.sqrt(np.sum((nucleus_centroid - ind_centroid) ** 2))
-            if distance < max_distance:
-                associated_individuals.append(i)
-                individuals_with_nuclei.add(i)  # Track this individual as associated
-        
-        # Calculate footprint
-        footprint = 0
-        for net in associated_networks:
-            footprint += net.area
-        for idx in associated_individuals:
-            footprint += individuals[idx].area
-        footprint_microns = footprint * (MICRONS_PER_PIXEL ** 2)
-        
-        # Get network statistics
-        n_networks, mean_network_size, mean_branch_length = get_network_stats(
-            associated_networks, branch_data)
-        
-        excel_data.append({
-            'Nucleus ID': nucleus_id,
-            'Nucleus Area (μm²)': area,
-            'Mitochondrial Footprint (μm²)': footprint_microns,
-            'Individuals': len(associated_individuals),
-            'Networks': n_networks,
-            'Mean Network Size': mean_network_size,
-            'Mean Branch Length (μm)': mean_branch_length
-        })
+for nucleus_id, (contour, area, centroid) in enumerate(zip(nuclei_contours, nuclei_areas, nuclei_centroids), 1):
+    # Use pre-calculated nucleus centroid
+    nucleus_cx, nucleus_cy = centroid
+    nucleus_centroid = np.array([nucleus_cy, nucleus_cx])
+    
+    # Find associated networks and individuals
+    associated_networks = []
+    associated_individuals = []
+    max_distance = 100  # pixels
+    
+    # Check networks
+    for i, net in enumerate(networks):
+        net_centroid = get_component_centroid(net)
+        distance = np.sqrt(np.sum((nucleus_centroid - net_centroid) ** 2))
+        if distance < max_distance:
+            associated_networks.append(net)
+            networks_with_nuclei.add(i)  # Track this network as associated
+    
+    # Check individuals
+    for i, ind in enumerate(individuals):
+        ind_centroid = get_component_centroid(ind)
+        distance = np.sqrt(np.sum((nucleus_centroid - ind_centroid) ** 2))
+        if distance < max_distance:
+            associated_individuals.append(i)
+            individuals_with_nuclei.add(i)  # Track this individual as associated
+    
+    # Calculate footprint
+    footprint = 0
+    for net in associated_networks:
+        footprint += net.area
+    for idx in associated_individuals:
+        footprint += individuals[idx].area
+    footprint_microns = footprint * (MICRONS_PER_PIXEL ** 2)
+    
+    # Get network statistics
+    n_networks, mean_network_size, mean_branch_length = get_network_stats(
+        associated_networks, branch_data)
+    
+    excel_data.append({
+        'Nucleus ID': nucleus_id,
+        'Nucleus Area (μm²)': area,
+        'Mitochondrial Footprint (μm²)': footprint_microns,
+        'Individuals': len(associated_individuals),
+        'Networks': n_networks,
+        'Mean Network Size': mean_network_size,
+        'Mean Branch Length (μm)': mean_branch_length
+    })
 
 # Create and save Excel file
 df = pd.DataFrame(excel_data)
@@ -436,30 +494,14 @@ else:
     ax7.set_title("Branch Length Distribution")
 ax7.axis('on')
 
-# Nuclei Areas
+# Nuclei Areas Visualization
 ax8 = plt.subplot(248)
-nuclei_centroids = []
-
-# Get areas from contours
-contours, _ = cv2.findContours(nuclei_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-for contour in contours:
-    area_pixels = cv2.contourArea(contour)
-    area_microns = area_pixels * (MICRONS_PER_PIXEL ** 2)
-    nuclei_areas.append(area_microns)
-    
-    # Calculate centroid
-    M = cv2.moments(contour)
-    if M["m00"] != 0:
-        cx = int(M["m10"] / M["m00"])
-        cy = int(M["m01"] / M["m00"])
-        nuclei_centroids.append((cx, cy))
-
-# Create nuclei visualization
+# Create nuclei visualization using pre-calculated values
 nuclei_img = cv2.cvtColor(img_median.astype(np.float32), cv2.COLOR_GRAY2BGR)
-for i, (contour, area, centroid) in enumerate(zip(contours, nuclei_areas, nuclei_centroids)):
+for i, (contour, area, centroid) in enumerate(zip(nuclei_contours, nuclei_areas, nuclei_centroids), 1):
     cv2.drawContours(nuclei_img, [contour], -1, (0, 255, 255), 2)  # Yellow contour
     cx, cy = centroid
-    cv2.putText(nuclei_img, f"{area:.1f}μm²", (cx-20, cy),
+    cv2.putText(nuclei_img, f"{i}: {area:.1f}μm²", (cx-20, cy),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
 
 ax8.imshow(nuclei_img)
