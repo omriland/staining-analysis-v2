@@ -1391,6 +1391,14 @@ class NucleiCounter:
                 'Red Dots / Blue Nuclei Ratio': result['Red_Dots_Per_Nucleus']
             }
             
+            # Add green dot data if applicable
+            if self.analyze_green_dots and 'Green_Dot_Count' in result:
+                file_data.update({
+                    'Total Green Dots': result['Green_Dot_Count'],
+                    'Total Green Area (μm²)': result['Total_Green_Area_Microns'],
+                    'Green Dots / Blue Nuclei Ratio': result['Green_Dots_Per_Nucleus']
+                })
+            
             # Add nearest nucleus analysis data if available
             if self.analyze_nearest_nucleus and filename in self.nucleus_dot_associations:
                 nucleus_mapping = self.nucleus_dot_associations[filename]
@@ -1457,6 +1465,15 @@ class NucleiCounter:
             f"- Total nuclei detected: {total_nuclei}",
             f"- Total red dots detected: {total_red_dots}"
         ])
+        
+        # Add green dot statistics if applicable
+        if self.analyze_green_dots and any('Total Green Dots' in result for result in excel_data):
+            total_green_dots = sum(result.get('Total Green Dots', 0) for result in excel_data)
+            total_green_area = sum(result.get('Total Green Area (μm²)', 0) for result in excel_data)
+            message.extend([
+                f"- Total green dots detected: {total_green_dots}",
+                f"- Total green area: {total_green_area:.2f} μm²"
+            ])
         
         # Nearest nucleus analysis statistics if available
         if self.analyze_nearest_nucleus and nucleus_data:
