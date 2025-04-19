@@ -1166,6 +1166,65 @@ class NucleiCounter:
                             dx, dy = dot['centroid']
                             cv2.line(result_img, (nx, ny), (dx, dy), (0, 255, 255), 1)  # Yellow lines
 
+        # Process green channel if the image is RGB and green dot analysis is enabled
+        if self.analyze_green_dots and len(image.shape) == 3 and image.shape[2] >= 3:
+            # Extract green channel
+            green_channel = image[:, :, 1]  # Green channel is index 1 in RGB
+            
+            # Apply Gaussian blur
+            blurred_green = cv2.GaussianBlur(green_channel, (5, 5), 0)
+            
+            # Apply threshold to get binary image of green dots
+            _, green_binary = cv2.threshold(blurred_green, self.params['green_threshold'], 255, cv2.THRESH_BINARY)
+            
+            # Label connected components
+            green_labels = measure.label(green_binary)
+            green_regions = measure.regionprops(green_labels)
+            
+            # Filter green dots by size and process each dot
+            self.green_dots = []  # Reset green dots list
+            for region in green_regions:
+                if self.params['green_min_size'] <= region.area <= self.params['green_max_size']:
+                    # Calculate centroid and area
+                    cy, cx = region.centroid
+                    area_pixels = region.area
+                    area_microns = area_pixels / (self.MICRON_CONVERSION * self.MICRON_CONVERSION)
+                    
+                    # Calculate average intensity in the original green channel
+                    green_intensity = np.mean(green_channel[region.coords[:, 0], region.coords[:, 1]])
+                    
+                    dot_data = {
+                        'id': len(self.green_dots) + 1,
+                        'centroid': (int(cx), int(cy)),
+                        'area_pixels': area_pixels,
+                        'area_microns': area_microns,
+                        'intensity': green_intensity,
+                        'coords': region.coords
+                    }
+                    
+                    # Find nearest nucleus if analyzing nearest nucleus
+                    if self.analyze_nearest_nucleus and nuclei_centroids:
+                        min_dist = float('inf')
+                        nearest_nucleus = None
+                        
+                        for nucleus in nuclei_centroids:
+                            nx, ny = nucleus['centroid']
+                            dist = np.sqrt((cx - nx)**2 + (cy - ny)**2)
+                            if dist < min_dist:
+                                min_dist = dist
+                                nearest_nucleus = nucleus
+                        
+                        if nearest_nucleus:
+                            dot_data['nearest_nucleus'] = nearest_nucleus['id']
+                    
+                    self.green_dots.append(dot_data)
+                    
+                    # Draw green dot on result image with magenta color (255, 0, 255) in BGR
+                    cv2.circle(result_img, (int(cx), int(cy)), 5, (255, 0, 255), -1)  # Magenta color for green dots
+            
+            # Calculate total green area in microns
+            self.total_green_area_microns = sum(dot['area_microns'] for dot in self.green_dots)
+
         return binary, nuclei_mask, result_img, len(contours) + len(self.manual_nuclei)
 
     def save_current_image(self):
