@@ -1,6 +1,6 @@
 # s129 area / prpf area (%)
 # TH percentage
-# annexin area per cell?
+
 import os
 import numpy as np
 from skimage import io, img_as_float, color
