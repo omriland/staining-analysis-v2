@@ -1,3 +1,14 @@
+# MiNA_V2.py
+# This script allows for a one Tiff file to be loaded and analyzed.
+# The user is prompted to outline each nucleus in the image.
+# The script then calculates the area and centroid of each nucleus.
+# The script then calculates the number of branches in each nucleus.
+# The script then calculates the number of junctions in each nucleus.
+# The script then calculates the number of networks in each nucleus.
+# The script then calculates the number of individuals in each nucleus.
+# The script then calculates the number of mitochondria in each nucleus.
+# The script then outputs the results to an Excel file.
+
 import numpy as np
 import cv2
 from skimage import io, filters, measure, color, morphology, exposure
