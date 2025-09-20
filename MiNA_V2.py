@@ -1,4 +1,5 @@
 # MiNA_V2.py
+# Last updated: 2025-09-20
 # This script allows for a one Tiff file to be loaded and analyzed.
 # The user is prompted to outline each nucleus in the image.
 # The script then calculates the area and centroid of each nucleus.
