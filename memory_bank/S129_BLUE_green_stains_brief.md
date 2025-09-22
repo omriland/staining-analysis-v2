@@ -1,3 +1,10 @@
+---
+title: S129_BLUE_green_stains — Brief
+type: brief
+script: S129_BLUE_green_stains.py
+version: 1
+---
+
 # S129_BLUE_green_stains.py — Brief
 
 Purpose

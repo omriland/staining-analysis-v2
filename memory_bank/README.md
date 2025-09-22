@@ -1,3 +1,9 @@
+---
+title: Memory Bank Overview
+type: index
+version: 1
+---
+
 # Memory Bank
 
 This folder holds concise notes about the repository's analysis scripts: purpose, pipelines, key parameters, inputs/outputs, and caveats.

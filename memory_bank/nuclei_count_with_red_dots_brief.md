@@ -1,3 +1,10 @@
+---
+title: nuclei_count_with_red_dots — Brief
+type: brief
+script: FINAL_ANALYSIS.py
+version: 1
+---
+
 # nuclei_count_with_red_dots.py — Brief
 
 Purpose

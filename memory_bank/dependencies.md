@@ -1,3 +1,9 @@
+---
+title: Dependencies
+type: dependencies
+version: 1
+---
+
 # Dependencies
 
 Core scientific

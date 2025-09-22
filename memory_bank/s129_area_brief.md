@@ -1,3 +1,10 @@
+---
+title: s129_area — Brief
+type: brief
+script: s129_area.py
+version: 1
+---
+
 # s129_area.py — Brief
 
 Purpose

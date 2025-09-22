@@ -1,0 +1,18 @@
+{
+  "name": "staining-analysis-v2-memory",
+  "version": 1,
+  "files": [
+    {"path": "START_OF_CHAT_RULE.md", "type": "rule"},
+    {"path": "README.md", "type": "index"},
+    {"path": "repo_overview.md", "type": "overview"},
+    {"path": "dependencies.md", "type": "dependencies"},
+    {"path": "analysis_FAST_V2_brief.md", "type": "brief", "script": "analysis_FAST_V2.py"},
+    {"path": "nuclei_count_only_brief.md", "type": "brief", "script": "nuclei_count_only.py"},
+    {"path": "nuclei_count_with_red_dots_brief.md", "type": "brief", "script": "FINAL_ANALYSIS.py"},
+    {"path": "MiNA_brief.md", "type": "brief", "script": "MiNA.py"},
+    {"path": "MiNA_V2_brief.md", "type": "brief", "script": "MiNA_V2.py"},
+    {"path": "s129_area_brief.md", "type": "brief", "script": "s129_area.py"},
+    {"path": "S129_BLUE_green_stains_brief.md", "type": "brief", "script": "S129_BLUE_green_stains.py"},
+    {"path": "mitosox_analysis_process.md", "type": "process"}
+  ]
+}

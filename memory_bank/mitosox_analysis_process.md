@@ -1,3 +1,9 @@
+---
+title: MitoSOX Per-Nucleus Process
+type: process
+version: 1
+---
+
 # MitoSOX Per-Nucleus Analysis Process
 
 ## Overview

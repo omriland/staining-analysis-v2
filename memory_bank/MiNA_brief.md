@@ -1,3 +1,10 @@
+---
+title: MiNA — Brief
+type: brief
+script: MiNA.py
+version: 1
+---
+
 # MiNA.py — Brief
 
 Purpose
