@@ -7,6 +7,8 @@ pandas>=1.3.0
 # Image processing
 opencv-python>=4.5.0
 scikit-image>=0.18.0
+tifffile>=2022.8.12
+imagecodecs>=2021.8.26
 
 # Data visualization
 matplotlib>=3.4.0
