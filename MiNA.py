@@ -431,26 +431,22 @@ skeleton_rgb = np.zeros((*skeleton.shape, 3))
 skeleton_rgb[skeleton] = [0.5, 0.5, 0.5]
 for i, network in enumerate(networks):
     if i in networks_with_nuclei:
-        bbox = network.bbox
-        network_mask = np.zeros_like(skeleton, dtype=bool)
-        network_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = network.image
-        skeleton_rgb[network_mask & skeleton] = [0, 1, 0]
+        r, c = network.coords[:, 0], network.coords[:, 1]
+        skeleton_rgb[r, c] = [0, 1, 0]
 for i, individual in enumerate(individuals):
     if i in individuals_with_nuclei:
-        bbox = individual.bbox
-        individual_mask = np.zeros_like(skeleton, dtype=bool)
-        individual_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = individual.image
-        skeleton_rgb[individual_mask & skeleton] = [0, 0, 1]
+        r, c = individual.coords[:, 0], individual.coords[:, 1]
+        skeleton_rgb[r, c] = [0, 0, 1]
 skeleton_rgb[junction_centers] = [1, 0, 0]
 
-network_mask = np.zeros_like(skeleton)
-individual_mask = np.zeros_like(skeleton)
+network_mask = np.zeros(skeleton.shape, dtype=np.uint8)
+individual_mask = np.zeros(skeleton.shape, dtype=np.uint8)
 for network in networks:
-    coords = network.coords
-    network_mask[coords[:, 0], coords[:, 1]] = 1
+    r, c = network.coords[:, 0], network.coords[:, 1]
+    network_mask[r, c] = 1
 for individual in individuals:
-    coords = individual.coords
-    individual_mask[coords[:, 0], coords[:, 1]] = 1
+    r, c = individual.coords[:, 0], individual.coords[:, 1]
+    individual_mask[r, c] = 1
 
 nuclei_img = cv2.cvtColor(img_median.astype(np.float32), cv2.COLOR_GRAY2BGR)
 for i, (contour, area, centroid) in enumerate(zip(nuclei_contours, nuclei_areas, nuclei_centroids), 1):
@@ -552,7 +548,7 @@ else:
 ax7.axis('on')
 
 ax8 = plt.subplot(248)
-ax8.imshow(cv2.cvtColor(disp_nuclei.astype(np.float32), cv2.COLOR_BGR2RGB))
+ax8.imshow(cv2.cvtColor(disp_nuclei.astype(np.uint8), cv2.COLOR_BGR2RGB) / 255.0)
 ax8.set_title("Nuclei Areas")
 ax8.axis('off')
 

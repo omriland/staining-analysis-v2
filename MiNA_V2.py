@@ -10,6 +10,7 @@
 # The script then calculates the number of mitochondria in each nucleus.
 # The script then outputs the results to an Excel file.
 
+import time
 import numpy as np
 import cv2
 from skimage import io, filters, measure, color, morphology, exposure
@@ -81,6 +82,8 @@ footprint_percent = 100 * footprint_area_pixels / binary.size
 
 # Step F: Skeletonize
 skeleton = skeletonize(binary)
+skeleton_pixels = np.sum(skeleton)
+print(f"Image: {binary.shape[0]}x{binary.shape[1]} | Skeleton: {skeleton_pixels:,} pixels")
 
 # --- Manual Nuclei Marking ---
 def mark_nuclei(image, original_colored):
@@ -168,6 +171,7 @@ print("Click points to draw outline, press Enter to complete each nucleus, Escap
 nuclei_contours = mark_nuclei(img, original_img)
 print(f"Marked {len(nuclei_contours)} nuclei")
 print("Analyzing skeleton and branches...")
+_t_start = _t0 = time.time()
 
 # Calculate nuclei areas right after getting contours
 nuclei_areas = []
@@ -206,31 +210,22 @@ def find_junctions(skel):
 
 def find_junction_centers(junction_pixels):
     """
-    Thin the junction pixels to get only central points.
-    This is purely for visualization purposes.
+    Find the center pixel of each junction cluster.
+    Uses vectorized ndimage operations instead of Python loops.
     """
     if not np.any(junction_pixels):
         return np.zeros_like(junction_pixels)
 
-    # Label each junction region
-    labeled_junctions = measure.label(junction_pixels)
+    labeled_junctions, n_labels = ndimage.label(junction_pixels)
+    if n_labels == 0:
+        return np.zeros_like(junction_pixels)
+
+    centers = ndimage.center_of_mass(junction_pixels, labeled_junctions, range(1, n_labels + 1))
     junction_centers = np.zeros_like(junction_pixels)
-
-    # For each labeled region, find its center
-    for region_id in range(1, labeled_junctions.max() + 1):
-        region = labeled_junctions == region_id
-        # Get coordinates of all pixels in this junction region
-        coords = np.argwhere(region)
-        if len(coords) > 0:
-            # Calculate the centroid
-            center = np.round(np.mean(coords, axis=0)).astype(int)
-            # Add a single pixel at the center
-            try:
-                junction_centers[center[0], center[1]] = True
-            except IndexError:
-                # Fallback in case we get an out-of-bounds center
-                junction_centers[coords[0][0], coords[0][1]] = True
-
+    for r, c in centers:
+        ri, ci = int(round(r)), int(round(c))
+        if 0 <= ri < junction_pixels.shape[0] and 0 <= ci < junction_pixels.shape[1]:
+            junction_centers[ri, ci] = True
     return junction_centers
 
 def count_branches(skel, junctions):
@@ -251,6 +246,7 @@ def count_branches(skel, junctions):
 
 # Identify junctions
 junction_pixels = find_junctions(skeleton)
+print(f"  find_junctions: {time.time()-_t0:.1f}s"); _t0 = time.time()
 
 # Label connected components in skeleton
 labeled_skeleton = measure.label(skeleton)
@@ -272,6 +268,7 @@ for prop in props:
         networks.append(prop)
     else:
         individuals.append(prop)
+print(f"  measure.label + regionprops ({len(props)} components): {time.time()-_t0:.1f}s"); _t0 = time.time()
 
 # Calculate branch statistics using skan
 print("Building skeleton graph...")
@@ -279,6 +276,7 @@ skeleton_data = csr.Skeleton(skeleton)
 branch_data = pd.DataFrame()
 branch_data['branch_length'] = skeleton_data.path_lengths() * MICRONS_PER_PIXEL  # Convert to microns immediately
 branch_data['network_id'] = -1  # Initialize all branches as unassigned
+print(f"  skan.Skeleton + path_lengths ({len(branch_data)} branches): {time.time()-_t0:.1f}s"); _t0 = time.time()
 
 def get_component_centroid(component):
     """Calculate centroid of a region property component"""
@@ -300,18 +298,18 @@ def get_network_stats(network_props, branch_data):
 
     return n_networks, mean_size, mean_length
 
-# Assign branches to networks (cache paths once — was O(branches*networks), now O(branches))
+# Assign branches to networks using labeled_skeleton (O(branches), not O(networks*branches))
 print("Assigning branches to networks...")
-all_paths = [skeleton_data.path_coordinates(idx) for idx in range(len(branch_data))]
-for i, network in enumerate(networks):
-    bbox = network.bbox
-    network_mask = np.zeros_like(skeleton, dtype=bool)
-    network_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = network.image
-
-    for branch_idx in range(len(branch_data)):
-        path_points = all_paths[branch_idx].astype(int)
-        if np.any(network_mask[path_points[:, 0], path_points[:, 1]]):
-            branch_data.loc[branch_idx, 'network_id'] = i
+label_to_network_idx = {net.label: i for i, net in enumerate(networks)}
+branch_network_ids = np.full(len(branch_data), -1, dtype=np.int32)
+for branch_idx in range(len(branch_data)):
+    path = skeleton_data.path_coordinates(branch_idx)
+    pt = path[0].astype(int)
+    lbl = labeled_skeleton[pt[0], pt[1]]
+    if lbl in label_to_network_idx:
+        branch_network_ids[branch_idx] = label_to_network_idx[lbl]
+branch_data['network_id'] = branch_network_ids
+print(f"  branch-network assignment ({len(networks)} networks): {time.time()-_t0:.1f}s"); _t0 = time.time()
 
 # Keep track of which networks and individuals are associated with nuclei
 networks_with_nuclei = set()
@@ -367,6 +365,7 @@ for nucleus_id, (contour, area, centroid) in enumerate(zip(nuclei_contours, nucl
         'Mean Network Size': mean_network_size,
         'Mean Branch Length (μm)': mean_branch_length
     })
+print(f"  process nuclei: {time.time()-_t0:.1f}s"); _t0 = time.time()
 
 # Create and save Excel file
 df = pd.DataFrame(excel_data)
@@ -391,34 +390,34 @@ print(f"\nAnalysis saved to: {excel_path}")
 
 # --- Visualization ---
 print("Generating figures...")
+print(f"  Excel write: {time.time()-_t0:.1f}s"); _t0 = time.time()
 
-# Build all figure assets at full resolution
+# Build all figure assets (use coords directly — no full-size masks per component)
+_tf = time.time()
 junction_centers = find_junction_centers(junction_pixels)
+print(f"    find_junction_centers: {time.time()-_tf:.1f}s"); _tf = time.time()
 skeleton_rgb = np.zeros((*skeleton.shape, 3))
 skeleton_rgb[skeleton] = [0.5, 0.5, 0.5]
 for i, network in enumerate(networks):
     if i in networks_with_nuclei:
-        bbox = network.bbox
-        network_mask = np.zeros_like(skeleton, dtype=bool)
-        network_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = network.image
-        skeleton_rgb[network_mask & skeleton] = [0, 1, 0]
+        r, c = network.coords[:, 0], network.coords[:, 1]
+        skeleton_rgb[r, c] = [0, 1, 0]
 for i, individual in enumerate(individuals):
     if i in individuals_with_nuclei:
-        bbox = individual.bbox
-        individual_mask = np.zeros_like(skeleton, dtype=bool)
-        individual_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = individual.image
-        skeleton_rgb[individual_mask & skeleton] = [0, 0, 1]
+        r, c = individual.coords[:, 0], individual.coords[:, 1]
+        skeleton_rgb[r, c] = [0, 0, 1]
 skeleton_rgb[junction_centers] = [1, 0, 0]
 
-network_mask = np.zeros_like(skeleton)
-individual_mask = np.zeros_like(skeleton)
+network_mask = np.zeros(skeleton.shape, dtype=np.uint8)
+individual_mask = np.zeros(skeleton.shape, dtype=np.uint8)
 for network in networks:
-    coords = network.coords
-    network_mask[coords[:, 0], coords[:, 1]] = 1
+    r, c = network.coords[:, 0], network.coords[:, 1]
+    network_mask[r, c] = 1
 for individual in individuals:
-    coords = individual.coords
-    individual_mask[coords[:, 0], coords[:, 1]] = 1
+    r, c = individual.coords[:, 0], individual.coords[:, 1]
+    individual_mask[r, c] = 1
 
+print(f"    skeleton_rgb + masks: {time.time()-_tf:.1f}s"); _tf = time.time()
 nuclei_img = cv2.cvtColor(img_median.astype(np.float32), cv2.COLOR_GRAY2BGR)
 for i, (contour, area, centroid) in enumerate(zip(nuclei_contours, nuclei_areas, nuclei_centroids), 1):
     cv2.drawContours(nuclei_img, [contour], -1, (0, 255, 255), 2)
@@ -457,6 +456,8 @@ else:
     disp_nuclei = nuclei_img
     disp_gray = img_median
 
+print(f"    downsample: {time.time()-_tf:.1f}s")
+print(f"  build figure assets: {time.time()-_t0:.1f}s"); _t0 = time.time()
 fig = plt.figure(figsize=(14, 7))
 
 # Original with overlay
@@ -527,7 +528,7 @@ ax7.axis('on')
 
 # Nuclei Areas Visualization
 ax8 = plt.subplot(248)
-ax8.imshow(cv2.cvtColor(disp_nuclei.astype(np.float32), cv2.COLOR_BGR2RGB))
+ax8.imshow(cv2.cvtColor(disp_nuclei.astype(np.uint8), cv2.COLOR_BGR2RGB) / 255.0)
 ax8.set_title("Nuclei Areas")
 ax8.axis('off')
 
@@ -537,6 +538,8 @@ plt.tight_layout()
 figure_path = image_path.rsplit('.', 1)[0] + '_figure.png'
 print("Saving figure...")
 plt.savefig(figure_path, dpi=150, bbox_inches='tight', format='png')
+print(f"  savefig: {time.time()-_t0:.1f}s")
+print(f"\n[Total post-nuclei time: {time.time()-_t_start:.1f}s]")
 print(f"Figure saved to: {figure_path}")
 
 # Show the figure
