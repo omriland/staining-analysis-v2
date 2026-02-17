@@ -167,6 +167,7 @@ print("Please outline each nucleus in the image.")
 print("Click points to draw outline, press Enter to complete each nucleus, Escape when done with all nuclei.")
 nuclei_contours = mark_nuclei(img, original_img)
 print(f"Marked {len(nuclei_contours)} nuclei")
+print("Analyzing skeleton and branches...")
 
 # Calculate nuclei areas right after getting contours
 nuclei_areas = []
@@ -273,6 +274,7 @@ for prop in props:
         individuals.append(prop)
 
 # Calculate branch statistics using skan
+print("Building skeleton graph...")
 skeleton_data = csr.Skeleton(skeleton)
 branch_data = pd.DataFrame()
 branch_data['branch_length'] = skeleton_data.path_lengths() * MICRONS_PER_PIXEL  # Convert to microns immediately
@@ -298,16 +300,16 @@ def get_network_stats(network_props, branch_data):
 
     return n_networks, mean_size, mean_length
 
-# Assign branches to networks
+# Assign branches to networks (cache paths once — was O(branches*networks), now O(branches))
+print("Assigning branches to networks...")
+all_paths = [skeleton_data.path_coordinates(idx) for idx in range(len(branch_data))]
 for i, network in enumerate(networks):
     bbox = network.bbox
     network_mask = np.zeros_like(skeleton, dtype=bool)
     network_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = network.image
 
-    # Check each branch
     for branch_idx in range(len(branch_data)):
-        path = skeleton_data.path_coordinates(branch_idx)
-        path_points = path.astype(int)
+        path_points = all_paths[branch_idx].astype(int)
         if np.any(network_mask[path_points[:, 0], path_points[:, 1]]):
             branch_data.loc[branch_idx, 'network_id'] = i
 
@@ -316,6 +318,7 @@ networks_with_nuclei = set()
 individuals_with_nuclei = set()
 
 # Process marked nuclei and generate Excel data
+print("Processing nuclei and writing results...")
 excel_data = []
 for nucleus_id, (contour, area, centroid) in enumerate(zip(nuclei_contours, nuclei_areas, nuclei_centroids), 1):
     # Use pre-calculated nucleus centroid
@@ -387,6 +390,7 @@ with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
 print(f"\nAnalysis saved to: {excel_path}")
 
 # --- Visualization ---
+print("Generating figures...")
 fig = plt.figure(figsize=(20, 10))
 
 # Original with overlay

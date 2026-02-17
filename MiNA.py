@@ -158,6 +158,7 @@ print("Please outline each nucleus in the image.")
 print("Click points to draw outline, press Enter to complete each nucleus, Escape when done with all nuclei.")
 nuclei_contours = mark_nuclei(img, original_img)
 print(f"Marked {len(nuclei_contours)} nuclei")
+print("Analyzing skeleton and branches...")
 
 # Calculate nuclei areas right after getting contours
 nuclei_areas = []
@@ -309,7 +310,9 @@ def get_branches(graph):
     return branches
 
 
+print("Building skeleton graph...")
 G = skeleton_to_graph(skeleton)
+print("Extracting branches...")
 branches = get_branches(G)
 
 branch_data = pd.DataFrame({
@@ -342,6 +345,7 @@ def get_network_stats(network_props, branch_data):
 
 
 # Assign branches to networks (approximate)
+print("Assigning branches to networks...")
 for i, network in enumerate(networks):
     bbox = network.bbox
     network_mask = np.zeros_like(skeleton, dtype=bool)
@@ -357,6 +361,7 @@ networks_with_nuclei = set()
 individuals_with_nuclei = set()
 
 # Process marked nuclei and generate Excel data
+print("Processing nuclei and writing results...")
 excel_data = []
 for nucleus_id, (contour, area, centroid) in enumerate(zip(nuclei_contours, nuclei_areas, nuclei_centroids), 1):
     nucleus_cx, nucleus_cy = centroid
@@ -419,6 +424,7 @@ with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
 print(f"\nAnalysis saved to: {excel_path}")
 
 # --- Visualization ---
+print("Generating figures...")
 fig = plt.figure(figsize=(20, 10))
 
 ax1 = plt.subplot(241)
