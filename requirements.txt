@@ -16,8 +16,12 @@ matplotlib>=3.4.0
 # Network analysis (for MiNA.py)
 networkx>=2.6.0
 
+# Skeleton/network analysis (for MiNA_V2.py)
+skan>=0.11.0
+
 # Excel file handling (for pandas ExcelWriter)
 openpyxl>=3.0.0
+xlsxwriter>=3.0.0
 
 # Note: tkinter, warnings, traceback, and concurrent.futures are built-in Python modules
 # and don't need to be installed via pip
