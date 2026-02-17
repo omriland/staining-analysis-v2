@@ -425,56 +425,26 @@ print(f"\nAnalysis saved to: {excel_path}")
 
 # --- Visualization ---
 print("Generating figures...")
-fig = plt.figure(figsize=(20, 10))
-
-ax1 = plt.subplot(241)
-ax1.imshow(original_img)
-ax1.imshow(binary, cmap='magma', alpha=0.2)
-ax1.set_title("Original + Binary Mask")
-ax1.axis('off')
-
-ax2 = plt.subplot(242)
-ax2.imshow(binary, cmap='gray')
-ax2.set_title("Binary")
-ax2.axis('off')
 
 junction_centers = find_junction_centers(junction_pixels)
-
-ax3 = plt.subplot(243)
 skeleton_rgb = np.zeros((*skeleton.shape, 3))
 skeleton_rgb[skeleton] = [0.5, 0.5, 0.5]
-
 for i, network in enumerate(networks):
     if i in networks_with_nuclei:
         bbox = network.bbox
         network_mask = np.zeros_like(skeleton, dtype=bool)
         network_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = network.image
-        skeleton_rgb[network_mask & skeleton] = [0, 1, 0]  # Green for nucleus-associated networks
-
-# Add associated individuals in blue
+        skeleton_rgb[network_mask & skeleton] = [0, 1, 0]
 for i, individual in enumerate(individuals):
     if i in individuals_with_nuclei:
         bbox = individual.bbox
         individual_mask = np.zeros_like(skeleton, dtype=bool)
         individual_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = individual.image
-        skeleton_rgb[individual_mask & skeleton] = [0, 0, 1]  # Blue
-
-# Add junction centers in red
+        skeleton_rgb[individual_mask & skeleton] = [0, 0, 1]
 skeleton_rgb[junction_centers] = [1, 0, 0]
 
-ax3.imshow(skeleton_rgb)
-ax3.set_title("Skeleton + Junctions\n(Green = Networks, Blue = Individuals\nAssociated with Nuclei)")
-ax3.axis('off')
-
-ax4 = plt.subplot(244)
-ax4.imshow(~skeleton, cmap='binary')
-ax4.set_title("Skeleton")
-ax4.axis('off')
-
-ax5 = plt.subplot(245)
 network_mask = np.zeros_like(skeleton)
 individual_mask = np.zeros_like(skeleton)
-
 for network in networks:
     coords = network.coords
     network_mask[coords[:, 0], coords[:, 1]] = 1
@@ -482,9 +452,75 @@ for individual in individuals:
     coords = individual.coords
     individual_mask[coords[:, 0], coords[:, 1]] = 1
 
-ax5.imshow(original_img, cmap='gray', alpha=0.5)
-ax5.imshow(network_mask, cmap='Reds', alpha=0.5)
-ax5.imshow(individual_mask, cmap='Blues', alpha=0.5)
+nuclei_img = cv2.cvtColor(img_median.astype(np.float32), cv2.COLOR_GRAY2BGR)
+for i, (contour, area, centroid) in enumerate(zip(nuclei_contours, nuclei_areas, nuclei_centroids), 1):
+    cv2.drawContours(nuclei_img, [contour], -1, (0, 255, 255), 2)
+    cx, cy = centroid
+    cv2.putText(nuclei_img, f"{i}: {area:.1f}μm²", (cx - 20, cy),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+
+# Downsample for display to avoid very slow rendering/saving on large images
+MAX_DISPLAY_SIZE = 1024
+h, w = original_img.shape[:2]
+scale = min(1.0, MAX_DISPLAY_SIZE / max(h, w))
+if scale < 1.0:
+    new_w, new_h = int(w * scale), int(h * scale)
+    orig_bgr = cv2.cvtColor(original_img, cv2.COLOR_RGB2BGR) if original_img.ndim == 3 else original_img
+    disp_img = cv2.resize(orig_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    if disp_img.ndim == 2:
+        disp_img = cv2.cvtColor(disp_img, cv2.COLOR_GRAY2RGB)
+    else:
+        disp_img = cv2.cvtColor(disp_img, cv2.COLOR_BGR2RGB)
+    disp_binary = cv2.resize(binary.astype(np.uint8), (new_w, new_h), interpolation=cv2.INTER_NEAREST).astype(bool)
+    disp_skeleton_rgb = cv2.resize((skeleton_rgb * 255).astype(np.uint8), (new_w, new_h), interpolation=cv2.INTER_NEAREST) / 255.0
+    disp_skeleton = cv2.resize(skeleton.astype(np.uint8), (new_w, new_h), interpolation=cv2.INTER_NEAREST).astype(bool)
+    disp_net_ind = cv2.resize((network_mask.astype(np.uint8) + 2 * individual_mask.astype(np.uint8)), (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+    disp_nuclei = cv2.resize(nuclei_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    disp_gray = cv2.resize(img_median, (new_w, new_h), interpolation=cv2.INTER_AREA)
+else:
+    disp_img = cv2.cvtColor(original_img, cv2.COLOR_RGB2BGR) if original_img.ndim == 3 else original_img.copy()
+    if disp_img.ndim == 2:
+        disp_img = cv2.cvtColor(disp_img, cv2.COLOR_GRAY2RGB)
+    else:
+        disp_img = cv2.cvtColor(disp_img, cv2.COLOR_BGR2RGB)
+    disp_binary = binary
+    disp_skeleton_rgb = skeleton_rgb
+    disp_skeleton = skeleton
+    disp_net_ind = None
+    disp_nuclei = nuclei_img
+    disp_gray = img_median
+
+fig = plt.figure(figsize=(14, 7))
+
+ax1 = plt.subplot(241)
+ax1.imshow(disp_img)
+ax1.imshow(disp_binary, cmap='magma', alpha=0.2)
+ax1.set_title("Original + Binary Mask")
+ax1.axis('off')
+
+ax2 = plt.subplot(242)
+ax2.imshow(disp_binary, cmap='gray')
+ax2.set_title("Binary")
+ax2.axis('off')
+
+ax3 = plt.subplot(243)
+ax3.imshow(disp_skeleton_rgb)
+ax3.set_title("Skeleton + Junctions\n(Green = Networks, Blue = Individuals\nAssociated with Nuclei)")
+ax3.axis('off')
+
+ax4 = plt.subplot(244)
+ax4.imshow(~disp_skeleton, cmap='binary')
+ax4.set_title("Skeleton")
+ax4.axis('off')
+
+ax5 = plt.subplot(245)
+ax5.imshow(disp_gray, cmap='gray', alpha=0.5)
+if disp_net_ind is not None:
+    ax5.imshow(disp_net_ind == 1, cmap='Reds', alpha=0.5)
+    ax5.imshow(disp_net_ind == 2, cmap='Blues', alpha=0.5)
+else:
+    ax5.imshow(network_mask, cmap='Reds', alpha=0.5)
+    ax5.imshow(individual_mask, cmap='Blues', alpha=0.5)
 ax5.set_title(f"Networks ({len(networks)}) and\nIndividuals ({len(individuals)})")
 ax5.axis('off')
 
@@ -516,21 +552,15 @@ else:
 ax7.axis('on')
 
 ax8 = plt.subplot(248)
-nuclei_img = cv2.cvtColor(img_median.astype(np.float32), cv2.COLOR_GRAY2BGR)
-for i, (contour, area, centroid) in enumerate(zip(nuclei_contours, nuclei_areas, nuclei_centroids), 1):
-    cv2.drawContours(nuclei_img, [contour], -1, (0, 255, 255), 2)
-    cx, cy = centroid
-    cv2.putText(nuclei_img, f"{i}: {area:.1f}μm²", (cx-20, cy),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
-
-ax8.imshow(nuclei_img)
+ax8.imshow(cv2.cvtColor(disp_nuclei.astype(np.float32), cv2.COLOR_BGR2RGB))
 ax8.set_title("Nuclei Areas")
 ax8.axis('off')
 
 plt.tight_layout()
 
-figure_path = image_path.rsplit('.', 1)[0] + '_figure.tiff'
-plt.savefig(figure_path, dpi=300, bbox_inches='tight', format='tiff')
+figure_path = image_path.rsplit('.', 1)[0] + '_figure.png'
+print("Saving figure...")
+plt.savefig(figure_path, dpi=150, bbox_inches='tight', format='png')
 print(f"Figure saved to: {figure_path}")
 
 plt.show()
